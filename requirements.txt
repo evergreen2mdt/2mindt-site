@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+matplotlib
+openpyxl
+ib_insync
+tqdm
+python-dateutil
+scipy
+statsmodels
