@@ -46,3 +46,11 @@ Thumbs.db
 
 # === Archives ===
 archive/
+
+# Ignore local Excel test data
+scripts/*.xlsx
+scripts/output/
+
+# Ignore compiled Python bytecode
+scripts/__pycache__/
+
