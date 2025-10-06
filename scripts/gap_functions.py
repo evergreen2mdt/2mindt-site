@@ -8,7 +8,9 @@ from tqdm import tqdm
 from scipy.stats import trim_mean
 
 # add near the other imports
-from config import get_folder, DROPBOX_ROOT
+
+from dropbox_utils import upload_file
+from config import get_dropbox_path
 
 
 # === Excel Handling ===
@@ -366,10 +368,12 @@ def save_multiple_sheets_with_formatting(sheets_dict, output_path):
     wb.save(output_path)
 
 # === Runner ===
+
+
 def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
-                                   start_date=DEFAULT_START_DATE,
-                                   root: str = DROPBOX_ROOT):
+                                   start_date=DEFAULT_START_DATE):
     results = {}
+
     for ticker in contract_map:
         print(f"=== {ticker} ===")
         df = dfs.get(ticker)
@@ -377,6 +381,7 @@ def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
             print(f"No data for {ticker}, skipping")
             continue
 
+        # --- SPY corrections ---
         if ticker == "SPY":
             df["date"] = pd.to_datetime(df["date"])
             for date_str, values in SPY_CORRECTIONS.items():
@@ -384,6 +389,7 @@ def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
                 for col, val in values.items():
                     df.loc[mask, col] = val
 
+        # --- Core gap computations ---
         df = compute_gap_data(df)
         df["date"] = pd.to_datetime(df["date"], errors="coerce")
         df["target_achieved_date"] = pd.to_datetime(df["target_achieved_date"], errors="coerce")
@@ -399,11 +405,8 @@ def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
         mam_stats_pts = generate_mam_stats_by_gap_type_df(df)
         mam_stats_days = generate_mam_days_stats_by_gap_type_df(df)
 
-        folder = get_folder(ticker, "gaps")
-        os.makedirs(folder, exist_ok=True)
-        output_path = os.path.join(folder,
-                                   f"{ticker.lower()} gap analysis.xlsx")
-
+        # --- Save locally (temporary file) ---
+        local_filename = f"{ticker.lower()} gap analysis.xlsx"
         save_multiple_sheets_with_formatting(
             {
                 "All Data": df,
@@ -412,11 +415,18 @@ def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
                 "MAM (PTS)": mam_stats_pts,
                 "MAM (DAYS)": mam_stats_days,
             },
-            output_path
+            local_filename
         )
-        results[ticker] = output_path
-        print(f"Saved → {output_path}")
+
+        # --- Upload to Dropbox ---
+        dropbox_path = get_dropbox_path(ticker, "gaps")
+        upload_file(local_filename, dropbox_path)
+
+        results[ticker] = dropbox_path
+        print(f"[Dropbox] Uploaded {ticker} → {dropbox_path}")
+
     return results
+
 
 # === Main Runner ===
 if __name__ == "__main__":

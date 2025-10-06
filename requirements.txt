@@ -9,3 +9,4 @@ python-dateutil
 scipy
 statsmodels
 plotly>=5.0.0
+dropbox

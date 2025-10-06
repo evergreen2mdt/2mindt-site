@@ -6,21 +6,91 @@ import pandas as pd
 import numpy as np
 import base64
 from zoneinfo import ZoneInfo
-
+import plotly.express as px
 from config import TARGET_LOOP_SECONDS
 from gap_functions import CONTRACT_MAP
-
+import plotly.graph_objects as go
+import dropbox
+from io import BytesIO
+from config import get_folder, CONTRACT_MAP
 
 # === Path helpers ===
-from config import get_folder
+
+
+import numpy as np
+
+class LiveStreamDashboard:
+    def __init__(self, ticker: str):
+        self.ticker = ticker.upper()
+        self.dbx = dropbox.Dropbox(st.secrets["DROPBOX_TOKEN"])
+        self.paths = get_paths(self.ticker)
+        self.snapshot_path = self._get_latest_snapshot()
+        self.snapshot_timestamp = self._get_snapshot_timestamp()
+
+def read_excel_from_dropbox(dbx, dropbox_path: str, sheet_name: str):
+    """Download Excel sheet from Dropbox path to a BytesIO buffer."""
+    try:
+        _, res = dbx.files_download(dropbox_path)
+        with BytesIO(res.content) as bio:
+            df = pd.read_excel(bio, sheet_name=sheet_name)
+        return df
+    except Exception as e:
+        st.error(f"Failed to read {sheet_name} from Dropbox: {e}")
+        return pd.DataFrame()
+
+
+def weighted_pin(df_pins, spot, window_pct=0.05, window_abs=None, lam=3.0, min_strength=0):
+    """
+    Compute weighted pin strike given strikes and pinning strengths.
+    - df_pins: DataFrame with ['strike','pin_strength']
+    - spot: current spot price
+    - window_pct: % window around spot (default ±5%)
+    - window_abs: absolute window size (overrides pct if not None)
+    - lam: decay scale in dollars (None = no decay)
+    - min_strength: ignore weak pins below this level
+    """
+    pins = df_pins[df_pins['pin_strength'] > min_strength].copy()
+    if pins.empty:
+        return None
+
+    # window selection
+    if window_abs is not None:
+        lo, hi = spot - window_abs, spot + window_abs
+    else:
+        band = spot * window_pct
+        lo, hi = spot - band, spot + band
+    pins = pins[(pins['strike'] >= lo) & (pins['strike'] <= hi)]
+    if pins.empty:
+        return None
+
+    # distance-decay weights
+    if lam is not None and lam > 0:
+        decay = np.exp(-np.abs(pins['strike'] - spot) / lam)
+        eff_w = pins['pin_strength'] * decay
+    else:
+        eff_w = pins['pin_strength']
+
+    wsum = eff_w.sum()
+    if wsum == 0:
+        return None
+    return float((pins['strike'] * eff_w).sum() / wsum)
 
 def get_paths(ticker: str):
     t = ticker.lower()
     return {
-        "options_dir": get_folder(ticker, "options"),
-        "gaps_file": os.path.join(get_folder(ticker, "gaps"), f"{t} gap analysis.xlsx"),
-        "timebands_file": os.path.join(get_folder(ticker, "timebands"), f"{t}_timebands_history.xlsx"),
+        "options_dir": f"/{t}/{t}-options-data/",
+        "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
+        "timebands_file": f"/{t}/{t}-timebands/{t}_timebands_history.xlsx",
     }
+
+
+# def get_paths(ticker: str):
+#     t = ticker.lower()
+#     return {
+#         "options_dir": get_folder(ticker, "options"),
+#         "gaps_file": os.path.join(get_folder(ticker, "gaps"), f"{t} gap analysis.xlsx"),
+#         "timebands_file": os.path.join(get_folder(ticker, "timebands"), f"{t}_timebands_history.xlsx"),
+#     }
 
 
 
@@ -134,7 +204,7 @@ class LiveStreamDashboard:
 
     def render_gap_targets(self):
         try:
-            df_gap = pd.read_excel(self.paths["gaps_file"], sheet_name="All Data")
+            df_gap = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "All Data")
             df_gap["date"] = pd.to_datetime(df_gap["date"], errors="coerce").dt.date
             today = pd.Timestamp.now(tz=ZoneInfo("America/New_York")).date()
             today_target = df_gap[df_gap["date"] == today].copy()
@@ -143,10 +213,15 @@ class LiveStreamDashboard:
                 today_target = df_gap.sort_values("date", ascending=False).head(1).copy()
 
             # Load supporting sheets
-            df_roll = pd.read_excel(self.paths["gaps_file"], sheet_name="Gap Type Stats (DAYS)")
-            df_days = pd.read_excel(self.paths["gaps_file"], sheet_name="Days to Target")
-            df_mam = pd.read_excel(self.paths["gaps_file"], sheet_name="MAM (PTS)")
-            df_mam_days = pd.read_excel(self.paths["gaps_file"], sheet_name="MAM (DAYS)")
+            df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
+                                              "Gap Type Stats (DAYS)")
+            df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
+                                              "Days to Target")
+            df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
+                                             "MAM (PTS)")
+            df_mam_days = read_excel_from_dropbox(self.dbx,
+                                                  self.paths["gaps_file"],
+                                                  "MAM (DAYS)")
 
             st.subheader("Today's Target Data")
             st.dataframe(today_target[
@@ -177,11 +252,17 @@ class LiveStreamDashboard:
 
     def render_narratives(self, today_target):
         try:
-            df_mc = safe_read_excel(self.snapshot_path, "monte carlo")
-            df_final = safe_read_excel(self.snapshot_path, "final probs")
-            df_pin = safe_read_excel(self.snapshot_path, "pinning metrics")
-            df_greeks = safe_read_excel(self.snapshot_path, "greeks")
-            df_raw = safe_read_excel(self.snapshot_path, "raw options")
+            df_mc = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                            "monte carlo")
+            df_final = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                               "final probs")
+            df_pin = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                             "pinning metrics")
+            df_greeks = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                                "greeks")
+            df_raw = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                             "raw options")
+
             spot_price = df_raw["spot"].mode().iloc[0]
 
             st.subheader("Probability Table")
@@ -200,24 +281,30 @@ class LiveStreamDashboard:
             }])
             st.dataframe(prob_table, width="stretch")
 
-            st.subheader("Greeks Narrative")
-            agg = df_greeks.groupby("strike")[["net_gamma_exposure", "net_delta_exposure", "vega_exposure", "theta_exposure"]].sum().reset_index()
-            window = 3
-            strikes = range(int(spot_price) - window, int(spot_price) + window + 1)
-            focus = agg[agg["strike"].isin(strikes)].copy()
-            for col in ["net_gamma_exposure", "net_delta_exposure", "vega_exposure", "theta_exposure"]:
-                focus[col] = focus[col].round(0).astype(int)
-            st.dataframe(focus, width="stretch")
+            # st.subheader("Greeks Narrative")
+            # agg = df_greeks.groupby("strike")[["net_gamma_exposure", "net_delta_exposure", "vega_exposure", "theta_exposure"]].sum().reset_index()
+            # window = 3
+            # strikes = range(int(spot_price) - window, int(spot_price) + window + 1)
+            # focus = agg[agg["strike"].isin(strikes)].copy()
+            # for col in ["net_gamma_exposure", "net_delta_exposure", "vega_exposure", "theta_exposure"]:
+            #     focus[col] = focus[col].round(0).astype(int)
+            # st.dataframe(focus, width="stretch")
         except Exception as e:
             st.error(f"Narratives failed: {e}")
 
     def render_charts(self, today_target):
         try:
-            df_pin = safe_read_excel(self.snapshot_path, "pinning metrics")
-            df_greeks = safe_read_excel(self.snapshot_path, "greeks")
-            df_mc = safe_read_excel(self.snapshot_path, "monte carlo")
-            df_final = safe_read_excel(self.snapshot_path, "final probs")
-            df_raw = safe_read_excel(self.snapshot_path, "raw options")
+            df_pin = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                             "pinning metrics")
+            df_greeks = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                                "greeks")
+            df_mc = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                            "monte carlo")
+            df_final = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                               "final probs")
+            df_raw = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                             "raw options")
+
             spot_price = df_raw["spot"].mode().iloc[0]
 
             strikes = sorted(df_pin["strike"].unique())
@@ -244,40 +331,205 @@ class LiveStreamDashboard:
                 ax.grid(True, axis="y", linestyle="--", alpha=0.7)
 
             with col1:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                render_bar_chart(ax, pin_df["strike"], pin_df["pinning_strength_k"], "Pinning Strength", "×1k", "blue")
-                add_spot_and_target(ax, spot_price, today_target)
-                st.pyplot(fig)
-                plt.close(fig)
+                st.subheader("Pinning Strength (interactive)")
+
+                # Build base bar chart
+                pin_plot = pin_df.copy()
+                fig = px.bar(
+                    pin_plot,
+                    x="strike",
+                    y="pinning_strength_k",
+                    labels={"pinning_strength_k": "×1k", "strike": "Strike"},
+                    title="Pinning Strength",
+                    color_discrete_sequence=["blue"]
+                )
+
+                # Weighted pin line
+                wp = weighted_pin(
+                    pin_df.rename(
+                        columns={"pinning_strength_k": "pin_strength"}),
+                    spot_price, window_abs=10, lam=3.0
+                )
+                if wp is not None:
+                    fig.add_vline(
+                        x=wp, line_dash="dash", line_color="orange",
+                        annotation_text=f"Weighted Pin {wp:.2f}",
+                        annotation_position="top", annotation=dict(textangle=-90)
+                    )
+
+                # Spot line
+                if spot_price is not None:
+                    fig.add_vline(
+                        x=spot_price, line_dash="dash", line_color="red",
+                        annotation_text=f"Spot {spot_price:.2f}",
+                        annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+
+                # Target line
+                if today_target is not None and not today_target.empty:
+                    tgt = today_target.iloc[0]["previous_close"]
+                    fig.add_vline(
+                        x=tgt, line_dash="dash", line_color="purple",
+                        annotation_text="Target",
+                        annotation_position="top", annotation=dict(textangle=-90)
+                    )
+
+                fig.update_layout(
+                    bargap=0.05,
+                    xaxis=dict(tickmode="linear",
+                               tick0=pin_plot["strike"].min(), dtick=1),
+                    yaxis=dict(showgrid=True)
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+            # with col2:
+            #     fig, ax = plt.subplots(figsize=(6, 4))
+            #     render_bar_chart(ax, gamma.index, gamma["net"],
+            #                      "Gamma Exposure", "×1M", "orange")
+            #     add_spot_and_target(ax, spot_price, today_target)
+            #     st.pyplot(fig)
+            #     plt.close(fig)
+
 
             with col2:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.bar(gamma.index, gamma["net"], label="Net", color="orange", alpha=0.4)
-                ax.set_title("Gamma Exposure"); ax.set_ylabel("×1M"); ax.grid(True)
-                add_spot_and_target(ax, spot_price, today_target)
-                st.pyplot(fig)
-                plt.close(fig)
+                st.subheader("Gamma Exposure (interactive)")
+                gamma_plot = gamma.reset_index().rename(
+                    columns={"index": "strike"})
+                fig = px.bar(
+                    gamma_plot,
+                    x="strike",
+                    y="net",
+                    labels={"net": "×1M", "strike": "Strike"},
+                    title="Gamma Exposure"
+                )
+                # Add spot and target markers
+                if spot_price is not None:
+                    fig.add_vline(
+                        x=spot_price, line_dash="dash", line_color="red",
+                        annotation_text=f"Spot {spot_price:.2f}",
+                        annotation_position="top", annotation=dict(textangle=-90)
+                    )
+                if today_target is not None and not today_target.empty:
+                    tgt = today_target.iloc[0]["previous_close"]
+                    fig.add_vline(
+                        x=tgt, line_dash="dash", line_color="purple",
+                        annotation_text="Target", annotation_position="top", annotation=dict(textangle=-90)
+                    )
+                fig.update_layout(
+                    bargap=0.05,
+                    xaxis=dict(tickmode="linear", tick0=min(gamma.index),
+                               dtick=1),
+                    yaxis=dict(showgrid=True)
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
 
             with col3:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                render_bar_chart(ax, delta.index, delta["delta_exposure"], "Delta Exposure", "×1M", "green")
-                add_spot_and_target(ax, spot_price, today_target)
-                st.pyplot(fig)
-                plt.close(fig)
+                st.subheader("Delta Exposure (interactive)")
+                delta_plot = delta.reset_index().rename(
+                    columns={"index": "strike"})
+                fig = px.bar(
+                    delta_plot, x="strike", y="delta_exposure",
+                    labels={"delta_exposure": "×1M", "strike": "Strike"},
+                    title="Delta Exposure", color_discrete_sequence=["green"]
+                )
+                if spot_price is not None:
+                    fig.add_vline(
+                        x=spot_price, line_dash="dash", line_color="red",
+                        annotation_text=f"Spot {spot_price:.2f}",
+                        annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+                if today_target is not None and not today_target.empty:
+                    tgt = today_target.iloc[0]["previous_close"]
+                    fig.add_vline(
+                        x=tgt, line_dash="dash", line_color="purple",
+                        annotation_text="Target", annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+                fig.update_layout(bargap=0.05,
+                                  xaxis=dict(tickmode="linear", dtick=1),
+                                  yaxis=dict(showgrid=True))
+                st.plotly_chart(fig, use_container_width=True)
 
             with col4:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                render_bar_chart(ax, vega.index, vega["vega_exposure"], "Vega Exposure", "×1M", "purple")
-                add_spot_and_target(ax, spot_price, today_target)
-                st.pyplot(fig)
-                plt.close(fig)
+                st.subheader("Vega Exposure (interactive)")
+                vega_plot = vega.reset_index().rename(
+                    columns={"index": "strike"})
+                fig = px.bar(
+                    vega_plot, x="strike", y="vega_exposure",
+                    labels={"vega_exposure": "×1M", "strike": "Strike"},
+                    title="Vega Exposure", color_discrete_sequence=["purple"]
+                )
+                if spot_price is not None:
+                    fig.add_vline(
+                        x=spot_price, line_dash="dash", line_color="red",
+                        annotation_text=f"Spot {spot_price:.2f}",
+                        annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+                if today_target is not None and not today_target.empty:
+                    tgt = today_target.iloc[0]["previous_close"]
+                    fig.add_vline(
+                        x=tgt, line_dash="dash", line_color="purple",
+                        annotation_text="Target", annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+                fig.update_layout(bargap=0.05,
+                                  xaxis=dict(tickmode="linear", dtick=1),
+                                  yaxis=dict(showgrid=True))
+                st.plotly_chart(fig, use_container_width=True)
 
             with col5:
-                fig, ax = plt.subplots(figsize=(6, 4))
-                render_bar_chart(ax, theta.index, theta["theta_exposure"], "Theta Exposure", "×1M", "red")
-                add_spot_and_target(ax, spot_price, today_target)
-                st.pyplot(fig)
-                plt.close(fig)
+                st.subheader("Theta Exposure (interactive)")
+                theta_plot = theta.reset_index().rename(
+                    columns={"index": "strike"})
+                fig = px.bar(
+                    theta_plot, x="strike", y="theta_exposure",
+                    labels={"theta_exposure": "×1M", "strike": "Strike"},
+                    title="Theta Exposure", color_discrete_sequence=["red"]
+                )
+                if spot_price is not None:
+                    fig.add_vline(
+                        x=spot_price, line_dash="dash", line_color="red",
+                        annotation_text=f"Spot {spot_price:.2f}",
+                        annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+                if today_target is not None and not today_target.empty:
+                    tgt = today_target.iloc[0]["previous_close"]
+                    fig.add_vline(
+                        x=tgt, line_dash="dash", line_color="purple",
+                        annotation_text="Target", annotation_position="top",
+                        annotation=dict(textangle=-90)
+                    )
+                fig.update_layout(bargap=0.05,
+                                  xaxis=dict(tickmode="linear", dtick=1),
+                                  yaxis=dict(showgrid=True))
+                st.plotly_chart(fig, use_container_width=True)
+
+            # with col3:
+            #     fig, ax = plt.subplots(figsize=(6, 4))
+            #     render_bar_chart(ax, delta.index, delta["delta_exposure"], "Delta Exposure", "×1M", "green")
+            #     add_spot_and_target(ax, spot_price, today_target)
+            #     st.pyplot(fig)
+            #     plt.close(fig)
+            #
+            # with col4:
+            #     fig, ax = plt.subplots(figsize=(6, 4))
+            #     render_bar_chart(ax, vega.index, vega["vega_exposure"], "Vega Exposure", "×1M", "purple")
+            #     add_spot_and_target(ax, spot_price, today_target)
+            #     st.pyplot(fig)
+            #     plt.close(fig)
+            #
+            # with col5:
+            #     fig, ax = plt.subplots(figsize=(6, 4))
+            #     render_bar_chart(ax, theta.index, theta["theta_exposure"], "Theta Exposure", "×1M", "red")
+            #     add_spot_and_target(ax, spot_price, today_target)
+            #     st.pyplot(fig)
+            #     plt.close(fig)
 
             # Touch Probs
             df_bs = safe_read_excel(self.snapshot_path, "black scholes probs")
@@ -306,20 +558,142 @@ class LiveStreamDashboard:
         except Exception as e:
             st.error(f"Charts failed: {e}")
 
+    # def render_timebands(self):
+    #     try:
+    #         tb = pd.read_excel(self.paths["timebands_file"],
+    #                            sheet_name="Timebands")
+    #         tb["date"] = pd.to_datetime(tb["date"], errors="coerce")
+    #         tb = tb[tb["date"].notna()].copy()
+    #
+    #         if tb.empty:
+    #             st.info("No timebands available.")
+    #             return
+    #
+    #         # --- Select recent 3 trading days ---
+    #         dates = sorted(tb["date"].dt.date.unique())
+    #         recent_dates = dates[-3:] if len(dates) >= 3 else dates
+    #         df = (
+    #             tb[tb["date"].dt.date.isin(recent_dates)]
+    #             .copy()
+    #             .sort_values(["date", "band"])
+    #             .reset_index(drop=True)
+    #         )
+    #
+    #         # --- Core metrics ---
+    #         df["ratio_to_avg_20d"] = pd.to_numeric(df["ratio_to_avg_20d"],
+    #                                                errors="coerce")
+    #         df["price_change"] = df["close"] - df["open"]
+    #         df["price_direction"] = np.sign(df["price_change"])
+    #         df["ratio_to_avg_20d"] = pd.to_numeric(df["ratio_to_avg_20d"],
+    #                                                errors="coerce")
+    #
+    #         # If values are > 5, assume they were stored as percent (e.g. 67.9 → 0.679)
+    #         df.loc[df["ratio_to_avg_20d"] > 5, "ratio_to_avg_20d"] /= 100.0
+    #
+    #         df["VPDR"] = df["price_direction"] * (df["ratio_to_avg_20d"] - 1)
+    #
+    #         # === FIRST CHART: Timebands Candle + Volume Ratio ===
+    #         fig, ax1 = plt.subplots(figsize=(14, 5))
+    #         x_vals = np.arange(len(df))
+    #         y_ratio = df["ratio_to_avg_20d"].fillna(0).values
+    #
+    #         ax1.bar(x_vals, y_ratio, alpha=0.6, label="Vol / 20d Avg",
+    #                 color="cornflowerblue")
+    #         ax1.axhline(1.0, linestyle="--", linewidth=1, color="blue",
+    #                     label="20d avg")
+    #         ax1.set_ylabel("Volume Ratio")
+    #
+    #         # Timeband-style X labels
+    #         xticks = []
+    #         prev_date = None
+    #         for d, b in zip(df["date"], df["band"]):
+    #             current_date = d.date()
+    #             label = f"{current_date} {b.split('–')[0]}" if current_date != prev_date else \
+    #             b.split("–")[0]
+    #             xticks.append(label)
+    #             prev_date = current_date
+    #         ax1.set_xticks(x_vals)
+    #         ax1.set_xticklabels(xticks, rotation=90, fontsize=7)
+    #         ax1.grid(True, linestyle="--", alpha=0.6)
+    #         ax1.legend(fontsize=8)
+    #
+    #         # Shade ETH bands
+    #         if "session" in df.columns:
+    #             for i, sess in enumerate(df["session"]):
+    #                 if sess == "ETH":
+    #                     ax1.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.2)
+    #
+    #         # Overlay Candles
+    #         ax2 = ax1.twinx()
+    #         candle_width = 0.6
+    #         for i, r in df.iterrows():
+    #             o, h, l, c = r["open"], r["high"], r["low"], r["close"]
+    #             color = "g" if c >= o else "r"
+    #             ax2.vlines(i, l, h, color=color, linewidth=1)
+    #             ax2.add_patch(
+    #                 plt.Rectangle((i - candle_width / 2, min(o, c)),
+    #                               candle_width, abs(c - o),
+    #                               facecolor=color, edgecolor=color)
+    #             )
+    #         ax2.set_ylabel(f"{self.ticker} Price")
+    #
+    #         st.pyplot(fig)
+    #         plt.close(fig)
+    #
+    #         # === SECOND CHART: VPDR (separate clean line plot) ===
+    #         fig2, axv = plt.subplots(figsize=(14, 2.5))
+    #         x_vals2 = np.arange(len(df))
+    #         axv.axhline(0, color="black", linewidth=0.8)
+    #         axv.plot(x_vals2, df["VPDR"], color="black", linewidth=.5,
+    #                  label="VPDR (Volume–Price Divergence Ratio)")
+    #         # axv.scatter(x_vals2, df["VPDR"],
+    #         #             c=np.where(df["VPDR"] > 0, "green", "red"), s=25,
+    #         #             zorder=3)
+    #         axv.set_ylabel("VPDR")
+    #         axv.grid(True, linestyle="--", alpha=0.4)
+    #         axv.legend(fontsize=8)
+    #         st.pyplot(fig2)
+    #         plt.close(fig2)
+    #
+    #
+    #
+    #         # === Raw Preview ===
+    #         df_preview = (
+    #             tb[tb["date"].dt.date.isin(recent_dates)]
+    #             .copy()
+    #             .sort_values(["date", "band"], ascending=[False, False])
+    #             .reset_index(drop=True)
+    #         )
+    #         df_preview["date"] = pd.to_datetime(df_preview["date"]).dt.date
+    #
+    #         # Format numeric columns
+    #         if "ratio_to_avg_20d" in df_preview.columns:
+    #             df_preview["ratio_to_avg_20d"] = (df_preview[
+    #                                                   "ratio_to_avg_20d"] * 100).round(
+    #                 2).astype(str) + "%"
+    #         if "VPDR" in df.columns:
+    #             df_preview["VPDR"] = df["VPDR"].round(3)
+    #
+    #         st.subheader("Timebands (raw preview)")
+    #         st.dataframe(df_preview, width="stretch")
+    #
+    #     except Exception as e:
+    #         st.info(f"Timebands not available: {e}")
+
     def render_timebands(self):
         try:
-            tb = pd.read_excel(self.paths["timebands_file"],
-                               sheet_name="Timebands")
+            tb = read_excel_from_dropbox(self.dbx, self.paths["timebands_file"], "Timebands")
+
             # Force conversion to datetime, drop invalid
             tb["date"] = pd.to_datetime(tb["date"], errors="coerce")
 
             # Make sure we only use valid datetimes
             tb = tb[tb["date"].notna()].copy()
 
-            # Use most recent 1–2 available dates
+            # Use most recent 3 available dates
             dates = sorted(tb["date"].dt.date.unique())
-            if len(dates) >= 2:
-                recent_dates = dates[-2:]
+            if len(dates) >= 3:
+                recent_dates = dates[-3:]
             else:
                 recent_dates = dates
             df = tb[tb["date"].dt.date.isin(recent_dates)].copy().sort_values(
@@ -338,12 +712,27 @@ class LiveStreamDashboard:
             ax1.axhline(1.0, linestyle="--", linewidth=1, label="20d avg")
             ax1.set_ylabel("Volume Ratio")
             ax1.set_xticks(x_vals)
-            ax1.set_xticklabels(
-                [f"{d.date()} {b}" for d, b in zip(df["date"], df["band"])],
-                rotation=90, fontsize=7
-            )
+            xticks = []
+            prev_date = None
+            for d, b in zip(df["date"], df["band"]):
+                current_date = d.date()
+                if current_date != prev_date:  # first band of a new day
+                    label = f"{current_date} {b.split('–')[0]}"  # date + start time
+                else:
+                    label = b.split("–")[0]  # just start time
+                xticks.append(label)
+                prev_date = current_date
+
+            ax1.set_xticklabels(xticks, rotation=90, fontsize=7)
+
             ax1.grid(True, linestyle="--", alpha=0.6)
             ax1.legend(fontsize=8)
+
+            # Shade ETH (afterhours) bands in grey
+            if "session" in df.columns:
+                for i, sess in enumerate(df["session"]):
+                    if sess == "ETH":
+                        ax1.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.2)
 
             # Overlay candles
             ax2 = ax1.twinx()
@@ -362,8 +751,26 @@ class LiveStreamDashboard:
             plt.close(fig)
 
             # Raw preview
+            df = (
+                tb[tb["date"].dt.date.isin(recent_dates)]
+                .copy()
+                .sort_values(["date", "band"],
+                             ascending=[False, False])  # most recent first
+                .reset_index(drop=True)
+            )
+
+            # Strip time from date for preview
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+
+            # Format ratio_to_avg_20d as percentage with 2 decimals
+            if "ratio_to_avg_20d" in df.columns:
+                df["ratio_to_avg_20d"] = (df["ratio_to_avg_20d"] * 100).round(
+                    2).astype(str) + "%"
+
+            # Raw preview
             st.subheader("Timebands (raw preview)")
-            st.dataframe(tb.head(), width="stretch")
+            st.dataframe(df, width="stretch")
+
 
         except Exception as e:
             st.info(f"Timebands not available: {e}")
