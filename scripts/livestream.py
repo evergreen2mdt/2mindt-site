@@ -806,7 +806,8 @@ st.set_page_config(layout="wide")
 
 
 # === Banner ===
-BANNER_PATH = r"C:\2mdt\2mindt-site\images\qma banner.png"
+BANNER_PATH = "images/qma_banner.png"
+
 
 if os.path.exists(BANNER_PATH):
     img_b64 = get_base64_image(BANNER_PATH)
