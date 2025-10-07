@@ -806,7 +806,7 @@ st.set_page_config(layout="wide")
 
 
 
-=== Banner ===
+#=== Banner ===
 BANNER_PATH = "images/qma_banner.png"
 
 
