@@ -804,8 +804,10 @@ class LiveStreamDashboard:
 # === Page Config ===
 st.set_page_config(layout="wide")
 
+
 # === Banner ===
 BANNER_PATH = r"C:\2mdt\2mindt-site\images\qma banner.png"
+
 if os.path.exists(BANNER_PATH):
     img_b64 = get_base64_image(BANNER_PATH)
     st.markdown(
@@ -813,21 +815,30 @@ if os.path.exists(BANNER_PATH):
         <style>.banner-img {{width: 100%; height: 200px; object-fit: cover;}}</style>
         <img src="data:image/png;base64,{img_b64}" class="banner-img">
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 else:
     st.markdown(
         """
-        <div style="background: linear-gradient(90deg, #4CAF50, #2E7D32);
-                    padding: 20px; border-radius: 8px; text-align: center;">
-            <h1 style="color:white; margin:0;">Quantitative Market Analysis</h1>
-            <p style="color:white; margin:0;">Options • Gamma • Pinning • Touch Probabilities</p>
+        <div style="
+            background:linear-gradient(to right,#2b9348,#55a630);
+            padding:20px;
+            border-radius:10px;
+            width:100%;
+            margin:0;
+            text-align:center;
+        ">
+            <h1 style="color:white;margin:0;">Quantitative Market Analysis</h1>
+            <p style="color:white;margin:0;">
+                Options • Gamma • Pinning • Touch Probabilities
+            </p>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 
 st.title("Multi-Ticker Dashboard")
+
 # === Tabs ===
 tabs = st.tabs(list(CONTRACT_MAP.keys()) + ["Glossary"])
 
