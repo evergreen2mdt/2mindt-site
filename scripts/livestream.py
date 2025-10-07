@@ -8,24 +8,30 @@ import base64
 from zoneinfo import ZoneInfo
 import plotly.express as px
 from config import TARGET_LOOP_SECONDS
-from gap_functions import CONTRACT_MAP
-import plotly.graph_objects as go
-import dropbox
+from config import get_dropbox_path, CONTRACT_MAP
+
 from io import BytesIO
-from config import get_folder, CONTRACT_MAP
+from dropbox_utils import get_dropbox_client
+
+
+# NEW
+from config import CONTRACT_MAP
+from config import get_dropbox_path
+
+
 
 # === Path helpers ===
 
 
 import numpy as np
 
-class LiveStreamDashboard:
-    def __init__(self, ticker: str):
-        self.ticker = ticker.upper()
-        self.dbx = dropbox.Dropbox(st.secrets["DROPBOX_TOKEN"])
-        self.paths = get_paths(self.ticker)
-        self.snapshot_path = self._get_latest_snapshot()
-        self.snapshot_timestamp = self._get_snapshot_timestamp()
+# class LiveStreamDashboard:
+#     def __init__(self, ticker: str):
+#         self.ticker = ticker.upper()
+#         self.dbx = dropbox.Dropbox(st.secrets["DROPBOX_TOKEN"])
+#         self.paths = get_paths(self.ticker)
+#         self.snapshot_path = self._get_latest_snapshot()
+#         self.snapshot_timestamp = self._get_snapshot_timestamp()
 
 def read_excel_from_dropbox(dbx, dropbox_path: str, sheet_name: str):
     """Download Excel sheet from Dropbox path to a BytesIO buffer."""
@@ -130,22 +136,28 @@ def get_base64_image(image_path):
 class LiveStreamDashboard:
     def __init__(self, ticker: str):
         self.ticker = ticker.upper()
+        self.dbx = get_dropbox_client()
         self.paths = get_paths(ticker)
         self.snapshot_path = self._get_latest_snapshot()
         self.snapshot_timestamp = self._get_snapshot_timestamp()
 
     def _get_latest_snapshot(self):
-        options_dir = self.paths["options_dir"]
-        if not os.path.exists(options_dir):
-            return None
-        files = sorted(
-            [f for f in os.listdir(options_dir)
-             if f.endswith(
-                ".xlsx") and f"{self.ticker.lower()}_options_data" in f and not f.startswith(
-                "~$")],
-            reverse=True
-        )
-        if not files:
+        """Return latest options Excel filename from Dropbox folder."""
+        options_dir = self.paths["options_dir"]  # e.g. /spy/spy-options-data/
+        try:
+            res = self.dbx.files_list_folder(options_dir)
+            files = [
+                e.name for e in res.entries
+                if e.name.endswith(
+                    ".xlsx") and f"{self.ticker.lower()}_options_data" in e.name
+            ]
+            if not files:
+                return None
+            files.sort(reverse=True)
+            latest = files[0]
+            return f"{options_dir}{latest}"
+        except Exception as e:
+            st.error(f"Dropbox listing failed for {self.ticker}: {e}")
             return None
 
         # --- slider with labels, fixing time formatting ---
@@ -252,15 +264,16 @@ class LiveStreamDashboard:
 
     def render_narratives(self, today_target):
         try:
-            df_mc = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            dropbox_file = self.snapshot_path
+            df_mc = read_excel_from_dropbox(self.dbx, dropbox_file,
                                             "monte carlo")
-            df_final = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            df_final = read_excel_from_dropbox(self.dbx, dropbox_file,
                                                "final probs")
-            df_pin = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            df_pin = read_excel_from_dropbox(self.dbx, dropbox_file,
                                              "pinning metrics")
-            df_greeks = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            df_greeks = read_excel_from_dropbox(self.dbx, dropbox_file,
                                                 "greeks")
-            df_raw = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            df_raw = read_excel_from_dropbox(self.dbx, dropbox_file,
                                              "raw options")
 
             spot_price = df_raw["spot"].mode().iloc[0]
@@ -294,15 +307,16 @@ class LiveStreamDashboard:
 
     def render_charts(self, today_target):
         try:
-            df_pin = read_excel_from_dropbox(self.dbx, self.snapshot_path,
-                                             "pinning metrics")
-            df_greeks = read_excel_from_dropbox(self.dbx, self.snapshot_path,
-                                                "greeks")
-            df_mc = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            dropbox_file = self.snapshot_path
+            df_mc = read_excel_from_dropbox(self.dbx, dropbox_file,
                                             "monte carlo")
-            df_final = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            df_final = read_excel_from_dropbox(self.dbx, dropbox_file,
                                                "final probs")
-            df_raw = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+            df_pin = read_excel_from_dropbox(self.dbx, dropbox_file,
+                                             "pinning metrics")
+            df_greeks = read_excel_from_dropbox(self.dbx, dropbox_file,
+                                                "greeks")
+            df_raw = read_excel_from_dropbox(self.dbx, dropbox_file,
                                              "raw options")
 
             spot_price = df_raw["spot"].mode().iloc[0]
@@ -532,9 +546,12 @@ class LiveStreamDashboard:
             #     plt.close(fig)
 
             # Touch Probs
-            df_bs = safe_read_excel(self.snapshot_path, "black scholes probs")
-            df_jump = safe_read_excel(self.snapshot_path, "jump diffusion probs")
-            df_heston = safe_read_excel(self.snapshot_path, "heston probs")
+            df_bs = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                            "black scholes probs")
+            df_jump = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                              "jump diffusion probs")
+            df_heston = read_excel_from_dropbox(self.dbx, self.snapshot_path,
+                                                "heston probs")
 
             c1, c2 = st.columns(2)
             with c1:
