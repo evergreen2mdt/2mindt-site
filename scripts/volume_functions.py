@@ -227,9 +227,12 @@ def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True):
             df.to_excel(w, sheet_name="Timebands", index=False)
 
         # --- Upload to Dropbox ---
-        dropbox_path = get_dropbox_path(ticker, "timebands", local_filename)
+        # --- Upload to Dropbox ---
+        dropbox_path = get_dropbox_path(ticker, "timebands",
+                                        f"{ticker.lower()}_timebands_history.xlsx")
         upload_file(local_filename, dropbox_path)
         print(f"[Dropbox] Uploaded {ticker} timebands → {dropbox_path}")
+
 
     finally:
         try:
