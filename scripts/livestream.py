@@ -1,37 +1,37 @@
-import streamlit as st
-import matplotlib.pyplot as plt
 import os
 import time
+import base64
+from io import BytesIO
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import numpy as np
-import base64
-from zoneinfo import ZoneInfo
+import matplotlib.pyplot as plt
 import plotly.express as px
-from config import TARGET_LOOP_SECONDS
-from config import get_dropbox_path, CONTRACT_MAP
+import streamlit as st
 
-from io import BytesIO
+from config import TARGET_LOOP_SECONDS, get_dropbox_path, CONTRACT_MAP
 from dropbox_utils import get_dropbox_client
 
 
-# NEW
-from config import CONTRACT_MAP
-from config import get_dropbox_path
-
-
-
-# === Path helpers ===
-
-
-import numpy as np
-
-# class LiveStreamDashboard:
-#     def __init__(self, ticker: str):
-#         self.ticker = ticker.upper()
-#         self.dbx = dropbox.Dropbox(st.secrets["DROPBOX_TOKEN"])
-#         self.paths = get_paths(self.ticker)
-#         self.snapshot_path = self._get_latest_snapshot()
-#         self.snapshot_timestamp = self._get_snapshot_timestamp()
+def compute_relative_flow(current_volume: float,
+                          elapsed_minutes: float,
+                          avg_20d_volume: float,
+                          bar_minutes: int = 30) -> float:
+    """
+    Compute real-time relative flow.
+    current_volume : volume so far in this bar
+    elapsed_minutes : minutes completed in the bar
+    avg_20d_volume : 20-day average total volume for this band
+    bar_minutes : bar length in minutes (default 30)
+    """
+    if elapsed_minutes <= 0 or avg_20d_volume <= 0:
+        return float("nan")
+    # Current flow rate vs. historical flow rate
+    current_rate = current_volume / elapsed_minutes
+    avg_rate = avg_20d_volume / bar_minutes
+    return current_rate / avg_rate
 
 def read_excel_from_dropbox(dbx, dropbox_path: str, sheet_name: str):
     """Download Excel sheet from Dropbox path to a BytesIO buffer."""
@@ -89,14 +89,6 @@ def get_paths(ticker: str):
         "timebands_file": f"/{t}/{t}-timebands/{t}_timebands_history.xlsx",
     }
 
-
-# def get_paths(ticker: str):
-#     t = ticker.lower()
-#     return {
-#         "options_dir": get_folder(ticker, "options"),
-#         "gaps_file": os.path.join(get_folder(ticker, "gaps"), f"{t} gap analysis.xlsx"),
-#         "timebands_file": os.path.join(get_folder(ticker, "timebands"), f"{t}_timebands_history.xlsx"),
-#     }
 
 
 
@@ -294,14 +286,7 @@ class LiveStreamDashboard:
             }])
             st.dataframe(prob_table, width="stretch")
 
-            # st.subheader("Greeks Narrative")
-            # agg = df_greeks.groupby("strike")[["net_gamma_exposure", "net_delta_exposure", "vega_exposure", "theta_exposure"]].sum().reset_index()
-            # window = 3
-            # strikes = range(int(spot_price) - window, int(spot_price) + window + 1)
-            # focus = agg[agg["strike"].isin(strikes)].copy()
-            # for col in ["net_gamma_exposure", "net_delta_exposure", "vega_exposure", "theta_exposure"]:
-            #     focus[col] = focus[col].round(0).astype(int)
-            # st.dataframe(focus, width="stretch")
+
         except Exception as e:
             st.error(f"Narratives failed: {e}")
 
@@ -398,13 +383,6 @@ class LiveStreamDashboard:
 
                 st.plotly_chart(fig, use_container_width=True)
 
-            # with col2:
-            #     fig, ax = plt.subplots(figsize=(6, 4))
-            #     render_bar_chart(ax, gamma.index, gamma["net"],
-            #                      "Gamma Exposure", "×1M", "orange")
-            #     add_spot_and_target(ax, spot_price, today_target)
-            #     st.pyplot(fig)
-            #     plt.close(fig)
 
 
             with col2:
@@ -524,26 +502,6 @@ class LiveStreamDashboard:
                                   yaxis=dict(showgrid=True))
                 st.plotly_chart(fig, use_container_width=True)
 
-            # with col3:
-            #     fig, ax = plt.subplots(figsize=(6, 4))
-            #     render_bar_chart(ax, delta.index, delta["delta_exposure"], "Delta Exposure", "×1M", "green")
-            #     add_spot_and_target(ax, spot_price, today_target)
-            #     st.pyplot(fig)
-            #     plt.close(fig)
-            #
-            # with col4:
-            #     fig, ax = plt.subplots(figsize=(6, 4))
-            #     render_bar_chart(ax, vega.index, vega["vega_exposure"], "Vega Exposure", "×1M", "purple")
-            #     add_spot_and_target(ax, spot_price, today_target)
-            #     st.pyplot(fig)
-            #     plt.close(fig)
-            #
-            # with col5:
-            #     fig, ax = plt.subplots(figsize=(6, 4))
-            #     render_bar_chart(ax, theta.index, theta["theta_exposure"], "Theta Exposure", "×1M", "red")
-            #     add_spot_and_target(ax, spot_price, today_target)
-            #     st.pyplot(fig)
-            #     plt.close(fig)
 
             # Touch Probs
             df_bs = read_excel_from_dropbox(self.dbx, self.snapshot_path,
@@ -575,127 +533,6 @@ class LiveStreamDashboard:
         except Exception as e:
             st.error(f"Charts failed: {e}")
 
-    # def render_timebands(self):
-    #     try:
-    #         tb = pd.read_excel(self.paths["timebands_file"],
-    #                            sheet_name="Timebands")
-    #         tb["date"] = pd.to_datetime(tb["date"], errors="coerce")
-    #         tb = tb[tb["date"].notna()].copy()
-    #
-    #         if tb.empty:
-    #             st.info("No timebands available.")
-    #             return
-    #
-    #         # --- Select recent 3 trading days ---
-    #         dates = sorted(tb["date"].dt.date.unique())
-    #         recent_dates = dates[-3:] if len(dates) >= 3 else dates
-    #         df = (
-    #             tb[tb["date"].dt.date.isin(recent_dates)]
-    #             .copy()
-    #             .sort_values(["date", "band"])
-    #             .reset_index(drop=True)
-    #         )
-    #
-    #         # --- Core metrics ---
-    #         df["ratio_to_avg_20d"] = pd.to_numeric(df["ratio_to_avg_20d"],
-    #                                                errors="coerce")
-    #         df["price_change"] = df["close"] - df["open"]
-    #         df["price_direction"] = np.sign(df["price_change"])
-    #         df["ratio_to_avg_20d"] = pd.to_numeric(df["ratio_to_avg_20d"],
-    #                                                errors="coerce")
-    #
-    #         # If values are > 5, assume they were stored as percent (e.g. 67.9 → 0.679)
-    #         df.loc[df["ratio_to_avg_20d"] > 5, "ratio_to_avg_20d"] /= 100.0
-    #
-    #         df["VPDR"] = df["price_direction"] * (df["ratio_to_avg_20d"] - 1)
-    #
-    #         # === FIRST CHART: Timebands Candle + Volume Ratio ===
-    #         fig, ax1 = plt.subplots(figsize=(14, 5))
-    #         x_vals = np.arange(len(df))
-    #         y_ratio = df["ratio_to_avg_20d"].fillna(0).values
-    #
-    #         ax1.bar(x_vals, y_ratio, alpha=0.6, label="Vol / 20d Avg",
-    #                 color="cornflowerblue")
-    #         ax1.axhline(1.0, linestyle="--", linewidth=1, color="blue",
-    #                     label="20d avg")
-    #         ax1.set_ylabel("Volume Ratio")
-    #
-    #         # Timeband-style X labels
-    #         xticks = []
-    #         prev_date = None
-    #         for d, b in zip(df["date"], df["band"]):
-    #             current_date = d.date()
-    #             label = f"{current_date} {b.split('–')[0]}" if current_date != prev_date else \
-    #             b.split("–")[0]
-    #             xticks.append(label)
-    #             prev_date = current_date
-    #         ax1.set_xticks(x_vals)
-    #         ax1.set_xticklabels(xticks, rotation=90, fontsize=7)
-    #         ax1.grid(True, linestyle="--", alpha=0.6)
-    #         ax1.legend(fontsize=8)
-    #
-    #         # Shade ETH bands
-    #         if "session" in df.columns:
-    #             for i, sess in enumerate(df["session"]):
-    #                 if sess == "ETH":
-    #                     ax1.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.2)
-    #
-    #         # Overlay Candles
-    #         ax2 = ax1.twinx()
-    #         candle_width = 0.6
-    #         for i, r in df.iterrows():
-    #             o, h, l, c = r["open"], r["high"], r["low"], r["close"]
-    #             color = "g" if c >= o else "r"
-    #             ax2.vlines(i, l, h, color=color, linewidth=1)
-    #             ax2.add_patch(
-    #                 plt.Rectangle((i - candle_width / 2, min(o, c)),
-    #                               candle_width, abs(c - o),
-    #                               facecolor=color, edgecolor=color)
-    #             )
-    #         ax2.set_ylabel(f"{self.ticker} Price")
-    #
-    #         st.pyplot(fig)
-    #         plt.close(fig)
-    #
-    #         # === SECOND CHART: VPDR (separate clean line plot) ===
-    #         fig2, axv = plt.subplots(figsize=(14, 2.5))
-    #         x_vals2 = np.arange(len(df))
-    #         axv.axhline(0, color="black", linewidth=0.8)
-    #         axv.plot(x_vals2, df["VPDR"], color="black", linewidth=.5,
-    #                  label="VPDR (Volume–Price Divergence Ratio)")
-    #         # axv.scatter(x_vals2, df["VPDR"],
-    #         #             c=np.where(df["VPDR"] > 0, "green", "red"), s=25,
-    #         #             zorder=3)
-    #         axv.set_ylabel("VPDR")
-    #         axv.grid(True, linestyle="--", alpha=0.4)
-    #         axv.legend(fontsize=8)
-    #         st.pyplot(fig2)
-    #         plt.close(fig2)
-    #
-    #
-    #
-    #         # === Raw Preview ===
-    #         df_preview = (
-    #             tb[tb["date"].dt.date.isin(recent_dates)]
-    #             .copy()
-    #             .sort_values(["date", "band"], ascending=[False, False])
-    #             .reset_index(drop=True)
-    #         )
-    #         df_preview["date"] = pd.to_datetime(df_preview["date"]).dt.date
-    #
-    #         # Format numeric columns
-    #         if "ratio_to_avg_20d" in df_preview.columns:
-    #             df_preview["ratio_to_avg_20d"] = (df_preview[
-    #                                                   "ratio_to_avg_20d"] * 100).round(
-    #                 2).astype(str) + "%"
-    #         if "VPDR" in df.columns:
-    #             df_preview["VPDR"] = df["VPDR"].round(3)
-    #
-    #         st.subheader("Timebands (raw preview)")
-    #         st.dataframe(df_preview, width="stretch")
-    #
-    #     except Exception as e:
-    #         st.info(f"Timebands not available: {e}")
 
     def render_timebands(self):
         try:
@@ -779,14 +616,40 @@ class LiveStreamDashboard:
             # Strip time from date for preview
             df["date"] = pd.to_datetime(df["date"]).dt.date
 
-            # Format ratio_to_avg_20d as percentage with 2 decimals
-            if "ratio_to_avg_20d" in df.columns:
-                df["ratio_to_avg_20d"] = (df["ratio_to_avg_20d"] * 100).round(
-                    2).astype(str) + "%"
+            # --- Relative Flow (live for current bar, else = ratio_to_avg_20d) ---
+            tz = ZoneInfo("America/New_York")
+            now = datetime.now(tz)
+
+            df["est_vol_at_close"] = df[
+                "ratio_to_avg_20d"]  # default for closed bars
+
+            def _dt_on_day(d, hhmm):
+                hh, mm = map(int, str(hhmm).split(":"))
+                return datetime(d.year, d.month, d.day, hh, mm, tzinfo=tz)
+
+            current_idx = None
+            for i, r in df.iterrows():
+                start_dt = _dt_on_day(pd.to_datetime(r["date"]).to_pydatetime(),
+                                      r["start"])
+                end_dt = _dt_on_day(pd.to_datetime(r["date"]).to_pydatetime(),
+                                    r["end"])
+                if start_dt <= now < end_dt:
+                    current_idx = i
+                    elapsed_minutes = max(0.01,
+                                          (now - start_dt).total_seconds() / 60)
+                    live_val = compute_relative_flow(r["volume"],
+                                                     elapsed_minutes,
+                                                     r["avg_20d"])
+                    df.at[i, "est_vol_at_close"] = live_val
+                    break
+
+
 
             # Raw preview
             st.subheader("Timebands (raw preview)")
             st.dataframe(df, width="stretch")
+
+
 
 
         except Exception as e:
@@ -807,7 +670,10 @@ st.set_page_config(layout="wide")
 
 
 #=== Banner ===
-BANNER_PATH = "images/qma_banner.png"
+import os
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+BANNER_PATH = os.path.join(PROJECT_ROOT, "images", "qma_banner.png")
+
 
 
 if os.path.exists(BANNER_PATH):
@@ -989,3 +855,7 @@ for i in range(REFRESH_INTERVAL, 0, -1):
     countdown_placeholder.markdown(f"**Refresh in {i} sec**")
     time.sleep(1)
 st.rerun()
+
+import os
+print(__file__)
+print(os.path.exists(os.path.join(os.path.dirname(__file__), "images", "qma_banner.png")))
