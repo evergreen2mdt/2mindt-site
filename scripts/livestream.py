@@ -713,7 +713,7 @@ class LiveStreamDashboard:
 
 
             # Raw preview
-            st.subheader("Timebands (raw preview)")
+            st.subheader("Timebands")
             st.dataframe(df, width="stretch")
 
 
