@@ -290,248 +290,6 @@ class LiveStreamDashboard:
         except Exception as e:
             st.error(f"Narratives failed: {e}")
 
-    # def render_charts(self, today_target):
-    #     try:
-    #         dropbox_file = self.snapshot_path
-    #         df_mc = read_excel_from_dropbox(self.dbx, dropbox_file,
-    #                                         "monte carlo")
-    #         df_final = read_excel_from_dropbox(self.dbx, dropbox_file,
-    #                                            "final probs")
-    #         df_pin = read_excel_from_dropbox(self.dbx, dropbox_file,
-    #                                          "pinning metrics")
-    #         df_greeks = read_excel_from_dropbox(self.dbx, dropbox_file,
-    #                                             "greeks")
-    #         df_raw = read_excel_from_dropbox(self.dbx, dropbox_file,
-    #                                          "raw options")
-    #
-    #         spot_price = df_raw["spot"].mode().iloc[0]
-    #
-    #         strikes = sorted(df_pin["strike"].unique())
-    #         pin_df = df_pin.groupby("strike")["pinning_strength"].max().reset_index().sort_values("strike")
-    #         pin_df["pinning_strength_k"] = pin_df["pinning_strength"] / 1000
-    #
-    #         gamma = df_greeks.groupby("strike")[["call_gamma_exposure", "put_gamma_exposure"]].sum()
-    #         gamma["net"] = gamma["call_gamma_exposure"] - gamma["put_gamma_exposure"]
-    #         gamma = gamma.reindex(strikes).fillna(0) / 1e6
-    #
-    #         delta = df_greeks.groupby("strike")[["delta_exposure"]].sum().reindex(strikes).fillna(0) / 1e6
-    #         vega = df_greeks.groupby("strike")[["vega_exposure"]].sum().reindex(strikes).fillna(0) / 1e6
-    #         theta = df_greeks.groupby("strike")[["theta_exposure"]].sum().reindex(strikes).fillna(0) / 1e6
-    #
-    #         col1, col2, col3 = st.columns(3)
-    #         col4, col5 = st.columns(2)
-    #
-    #         def render_bar_chart(ax, x_vals, y_vals, title, ylabel, color):
-    #             ax.bar(x_vals, y_vals, color=color, alpha=0.6)
-    #             ax.set_title(title)
-    #             ax.set_ylabel(ylabel)
-    #             ax.set_xticks(x_vals)
-    #             ax.set_xticklabels([str(int(s)) for s in x_vals], rotation=90, fontsize=8)
-    #             ax.grid(True, axis="y", linestyle="--", alpha=0.7)
-    #
-    #         with col1:
-    #             st.subheader("Pinning Strength (interactive)")
-    #
-    #             # Build base bar chart
-    #             pin_plot = pin_df.copy()
-    #             fig = px.bar(
-    #                 pin_plot,
-    #                 x="strike",
-    #                 y="pinning_strength_k",
-    #                 labels={"pinning_strength_k": "×1k", "strike": "Strike"},
-    #                 title="Pinning Strength",
-    #                 color_discrete_sequence=["blue"]
-    #             )
-    #
-    #             # Weighted pin line
-    #             wp = weighted_pin(
-    #                 pin_df.rename(
-    #                     columns={"pinning_strength_k": "pin_strength"}),
-    #                 spot_price, window_abs=10, lam=3.0
-    #             )
-    #             if wp is not None:
-    #                 fig.add_vline(
-    #                     x=wp, line_dash="dash", line_color="orange",
-    #                     annotation_text=f"Weighted Pin {wp:.2f}",
-    #                     annotation_position="top", annotation=dict(textangle=-90)
-    #                 )
-    #
-    #             # Spot line
-    #             if spot_price is not None:
-    #                 fig.add_vline(
-    #                     x=spot_price, line_dash="dash", line_color="red",
-    #                     annotation_text=f"Spot {spot_price:.2f}",
-    #                     annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #
-    #             # Target line
-    #             if today_target is not None and not today_target.empty:
-    #                 tgt = today_target.iloc[0]["previous_close"]
-    #                 fig.add_vline(
-    #                     x=tgt, line_dash="dash", line_color="purple",
-    #                     annotation_text="Target",
-    #                     annotation_position="top", annotation=dict(textangle=-90)
-    #                 )
-    #
-    #             fig.update_layout(
-    #                 bargap=0.05,
-    #                 xaxis=dict(tickmode="linear",
-    #                            tick0=pin_plot["strike"].min(), dtick=1),
-    #                 yaxis=dict(showgrid=True)
-    #             )
-    #
-    #             st.plotly_chart(fig, use_container_width=True)
-    #
-    #
-    #
-    #         with col2:
-    #             st.subheader("Gamma Exposure (interactive)")
-    #             gamma_plot = gamma.reset_index().rename(
-    #                 columns={"index": "strike"})
-    #             fig = px.bar(
-    #                 gamma_plot,
-    #                 x="strike",
-    #                 y="net",
-    #                 labels={"net": "×1M", "strike": "Strike"},
-    #                 title="Gamma Exposure"
-    #             )
-    #             # Add spot and target markers
-    #             if spot_price is not None:
-    #                 fig.add_vline(
-    #                     x=spot_price, line_dash="dash", line_color="red",
-    #                     annotation_text=f"Spot {spot_price:.2f}",
-    #                     annotation_position="top", annotation=dict(textangle=-90)
-    #                 )
-    #             if today_target is not None and not today_target.empty:
-    #                 tgt = today_target.iloc[0]["previous_close"]
-    #                 fig.add_vline(
-    #                     x=tgt, line_dash="dash", line_color="purple",
-    #                     annotation_text="Target", annotation_position="top", annotation=dict(textangle=-90)
-    #                 )
-    #             fig.update_layout(
-    #                 bargap=0.05,
-    #                 xaxis=dict(tickmode="linear", tick0=min(gamma.index),
-    #                            dtick=1),
-    #                 yaxis=dict(showgrid=True)
-    #             )
-    #             st.plotly_chart(fig, use_container_width=True)
-    #
-    #
-    #         with col3:
-    #             st.subheader("Delta Exposure (interactive)")
-    #             delta_plot = delta.reset_index().rename(
-    #                 columns={"index": "strike"})
-    #             fig = px.bar(
-    #                 delta_plot, x="strike", y="delta_exposure",
-    #                 labels={"delta_exposure": "×1M", "strike": "Strike"},
-    #                 title="Delta Exposure", color_discrete_sequence=["green"]
-    #             )
-    #             if spot_price is not None:
-    #                 fig.add_vline(
-    #                     x=spot_price, line_dash="dash", line_color="red",
-    #                     annotation_text=f"Spot {spot_price:.2f}",
-    #                     annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #             if today_target is not None and not today_target.empty:
-    #                 tgt = today_target.iloc[0]["previous_close"]
-    #                 fig.add_vline(
-    #                     x=tgt, line_dash="dash", line_color="purple",
-    #                     annotation_text="Target", annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #             fig.update_layout(bargap=0.05,
-    #                               xaxis=dict(tickmode="linear", dtick=1),
-    #                               yaxis=dict(showgrid=True))
-    #             st.plotly_chart(fig, use_container_width=True)
-    #
-    #         with col4:
-    #             st.subheader("Vega Exposure (interactive)")
-    #             vega_plot = vega.reset_index().rename(
-    #                 columns={"index": "strike"})
-    #             fig = px.bar(
-    #                 vega_plot, x="strike", y="vega_exposure",
-    #                 labels={"vega_exposure": "×1M", "strike": "Strike"},
-    #                 title="Vega Exposure", color_discrete_sequence=["purple"]
-    #             )
-    #             if spot_price is not None:
-    #                 fig.add_vline(
-    #                     x=spot_price, line_dash="dash", line_color="red",
-    #                     annotation_text=f"Spot {spot_price:.2f}",
-    #                     annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #             if today_target is not None and not today_target.empty:
-    #                 tgt = today_target.iloc[0]["previous_close"]
-    #                 fig.add_vline(
-    #                     x=tgt, line_dash="dash", line_color="purple",
-    #                     annotation_text="Target", annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #             fig.update_layout(bargap=0.05,
-    #                               xaxis=dict(tickmode="linear", dtick=1),
-    #                               yaxis=dict(showgrid=True))
-    #             st.plotly_chart(fig, use_container_width=True)
-    #
-    #         with col5:
-    #             st.subheader("Theta Exposure (interactive)")
-    #             theta_plot = theta.reset_index().rename(
-    #                 columns={"index": "strike"})
-    #             fig = px.bar(
-    #                 theta_plot, x="strike", y="theta_exposure",
-    #                 labels={"theta_exposure": "×1M", "strike": "Strike"},
-    #                 title="Theta Exposure", color_discrete_sequence=["red"]
-    #             )
-    #             if spot_price is not None:
-    #                 fig.add_vline(
-    #                     x=spot_price, line_dash="dash", line_color="red",
-    #                     annotation_text=f"Spot {spot_price:.2f}",
-    #                     annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #             if today_target is not None and not today_target.empty:
-    #                 tgt = today_target.iloc[0]["previous_close"]
-    #                 fig.add_vline(
-    #                     x=tgt, line_dash="dash", line_color="purple",
-    #                     annotation_text="Target", annotation_position="top",
-    #                     annotation=dict(textangle=-90)
-    #                 )
-    #             fig.update_layout(bargap=0.05,
-    #                               xaxis=dict(tickmode="linear", dtick=1),
-    #                               yaxis=dict(showgrid=True))
-    #             st.plotly_chart(fig, use_container_width=True)
-    #
-    #
-    #         # Touch Probs
-    #         df_bs = read_excel_from_dropbox(self.dbx, self.snapshot_path,
-    #                                         "black scholes probs")
-    #         df_jump = read_excel_from_dropbox(self.dbx, self.snapshot_path,
-    #                                           "jump diffusion probs")
-    #         df_heston = read_excel_from_dropbox(self.dbx, self.snapshot_path,
-    #                                             "heston probs")
-    #
-    #         c1, c2 = st.columns(2)
-    #         with c1:
-    #             st.subheader("Touch Probabilities DTE=0")
-    #             fig, ax = plt.subplots(figsize=(6, 4))
-    #             for label, dfp in [("Final", df_final), ("MC", df_mc), ("BS", df_bs), ("Jump", df_jump), ("Heston", df_heston)]:
-    #                 ax.plot(dfp["strike"], dfp["prob_hit_day_0"], label=label)
-    #             ax.set_ylim(0, 1); ax.grid(True, linestyle="--", alpha=0.6); ax.legend(fontsize=7)
-    #             add_spot_and_target(ax, spot_price, today_target)
-    #             st.pyplot(fig)
-    #             plt.close(fig)
-    #         with c2:
-    #             st.subheader("Touch Probabilities DTE=9")
-    #             fig, ax = plt.subplots(figsize=(6, 4))
-    #             for label, dfp in [("Final", df_final), ("MC", df_mc), ("BS", df_bs), ("Jump", df_jump), ("Heston", df_heston)]:
-    #                 ax.plot(dfp["strike"], dfp["prob_hit_day_9"], label=label)
-    #             ax.set_ylim(0, 1); ax.grid(True, linestyle="--", alpha=0.6); ax.legend(fontsize=7)
-    #             add_spot_and_target(ax, spot_price, today_target)
-    #             st.pyplot(fig)
-    #             plt.close(fig)
-    #     except Exception as e:
-    #         st.error(f"Charts failed: {e}")
     def render_charts(self, today_target):
         try:
             dropbox_file = self.snapshot_path
@@ -573,13 +331,17 @@ class LiveStreamDashboard:
 
             # ----- PINNING STRENGTH -----
             with col1:
-                st.subheader("Pinning Strength (interactive)")
+                st.subheader("Pinning Strength")
+                st.markdown(
+                    "<p style='font-size:14px;'>aggregate intensity of dealer positioning</p>",
+                    unsafe_allow_html=True
+                )
                 pin_plot = pin_df.copy()
                 fig = px.bar(
                     pin_plot,
                     x="strike", y="pinning_strength_k",
                     labels={"pinning_strength_k": "×1k", "strike": "Strike"},
-                    title="Pinning Strength",
+                    # title="Pinning Strength",
                     color_discrete_sequence=["blue"]
                 )
 
@@ -635,12 +397,19 @@ class LiveStreamDashboard:
 
             # ----- GAMMA EXPOSURE -----
             with col2:
-                st.subheader("Gamma Exposure (interactive)")
+                st.subheader("Gamma Exposure ")
+                st.markdown(
+                    "<p style='font-size:14px;'>sensitivity of delta to underlying price changes</p>",
+                    unsafe_allow_html=True
+                )
+
                 gamma_plot = gamma.reset_index().rename(
                     columns={"index": "strike"})
                 fig = px.bar(gamma_plot, x="strike", y="net",
-                             labels={"net": "×1M", "strike": "Strike"},
-                             title="Gamma Exposure")
+                             labels={"net": "×1M", "strike": "Strike"}
+                             # ,
+                             # title="Gamma Exposure"
+                )
                 if spot_price is not None:
                     fig.add_vline(x=spot_price, line_dash="dash",
                                   line_color="red",
@@ -669,13 +438,21 @@ class LiveStreamDashboard:
 
             # ----- DELTA EXPOSURE -----
             with col3:
-                st.subheader("Delta Exposure (interactive)")
+                st.subheader("Delta Exposure")
+                st.markdown(
+                    "<p style='font-size:14px;'>sensitivity of option value to underlying price changes</p>",
+                    unsafe_allow_html=True
+                )
+
+
+
+
                 delta_plot = delta.reset_index().rename(
                     columns={"index": "strike"})
                 fig = px.bar(delta_plot, x="strike", y="delta_exposure",
                              labels={"delta_exposure": "×1M",
                                      "strike": "Strike"},
-                             title="Delta Exposure",
+                             # title="Delta Exposure",
                              color_discrete_sequence=["green"])
                 if spot_price is not None:
                     fig.add_vline(x=spot_price, line_dash="dash",
@@ -704,13 +481,19 @@ class LiveStreamDashboard:
 
             # ----- VEGA EXPOSURE -----
             with col4:
-                st.subheader("Vega Exposure (interactive)")
+                st.subheader("Vega Exposure")
+
+                st.markdown(
+                    "<p style='font-size:14px;'>sensitivity of option value to implied volatility changes</p>",
+                    unsafe_allow_html=True
+                )
+
                 vega_plot = vega.reset_index().rename(
                     columns={"index": "strike"})
                 fig = px.bar(vega_plot, x="strike", y="vega_exposure",
                              labels={"vega_exposure": "×1M",
                                      "strike": "Strike"},
-                             title="Vega Exposure",
+                             # title="Vega Exposure",
                              color_discrete_sequence=["purple"])
                 if spot_price is not None:
                     fig.add_vline(x=spot_price, line_dash="dash",
@@ -739,13 +522,21 @@ class LiveStreamDashboard:
 
             # ----- THETA EXPOSURE -----
             with col5:
-                st.subheader("Theta Exposure (interactive)")
+                st.subheader("Theta Exposure")
+                st.markdown(
+                    "<p style='font-size:14px;'>sensitivity of option value to time decay</p>",
+                    unsafe_allow_html=True
+                )
+
+
+
+
                 theta_plot = theta.reset_index().rename(
                     columns={"index": "strike"})
                 fig = px.bar(theta_plot, x="strike", y="theta_exposure",
                              labels={"theta_exposure": "×1M",
                                      "strike": "Strike"},
-                             title="Theta Exposure",
+                             # title="Theta Exposure",
                              color_discrete_sequence=["red"])
                 if spot_price is not None:
                     fig.add_vline(x=spot_price, line_dash="dash",
