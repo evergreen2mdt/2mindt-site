@@ -445,6 +445,14 @@ def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
         results[ticker] = dropbox_path
         print(f"[Dropbox] Uploaded {ticker} → {dropbox_path}")
 
+    # --- Delete local temp file ---
+    try:
+        if os.path.exists(local_filename):
+            os.remove(local_filename)
+            print(f"[Local] Deleted temporary file: {local_filename}")
+    except Exception as e:
+        print(f"[Warning] Could not delete {local_filename}: {e}")
+
     return results
 
 
