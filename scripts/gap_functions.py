@@ -22,7 +22,7 @@ from openpyxl.styles import Font
 from config import DEFAULT_START_DATE
 
 # === Contract map: ticker -> (security type, exchange, currency) ===
-from config import CONTRACT_MAP
+from config import TICKER_MAP
 
 # === IB Data Fetch ===
 def get_ib_data(tickers="SPY", start_date="2003-01-01"):
@@ -48,7 +48,7 @@ def get_ib_data(tickers="SPY", start_date="2003-01-01"):
             continue
 
         try:
-            stype, exch, curr = CONTRACT_MAP[ticker]
+            stype, exch, curr = TICKER_MAP[ticker]
             contract = Stock(ticker, exch, curr) if stype == "Stock" else Index(ticker, exch)
 
             print(f"[get_ib_data] Requesting bars for {ticker} since {start_date}...")
@@ -389,11 +389,11 @@ def save_multiple_sheets_with_formatting(sheets_dict, output_path):
 # === Runner ===
 
 
-def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
+def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
                                    start_date=DEFAULT_START_DATE):
     results = {}
 
-    for ticker in contract_map:
+    for ticker in ticker_map:
         print(f"=== {ticker} ===")
         df = dfs.get(ticker)
         if df is None or df.empty:
@@ -458,7 +458,7 @@ def run_gap_analysis_for_contracts(contract_map: dict, dfs: dict,
 
 # === Main Runner ===
 if __name__ == "__main__":
-    dfs = get_ib_data(list(CONTRACT_MAP.keys()), start_date=DEFAULT_START_DATE)
-    results = run_gap_analysis_for_contracts(CONTRACT_MAP, dfs)
+    dfs = get_ib_data(list(TICKER_MAP.keys()), start_date=DEFAULT_START_DATE)
+    results = run_gap_analysis_for_contracts(TICKER_MAP, dfs)
     print("Gap analysis complete:", results)
 

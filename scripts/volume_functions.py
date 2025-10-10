@@ -1,4 +1,4 @@
-# volume_functions.py — 30-min bands (RTH + ETH) per ticker in CONTRACT_MAP
+# volume_functions.py — 30-min bands (RTH + ETH) per ticker in TICKER_MAP
 
 import os
 from datetime import datetime
@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 
-from config import CONTRACT_MAP
+from config import TICKER_MAP
 from config import DROPBOX_ROOT
 US_EASTERN = ZoneInfo("America/New_York")
 
@@ -44,7 +44,7 @@ def _fetch_30m(ticker: str, days: int) -> pd.DataFrame:
     ib = IB()
     ib.connect("127.0.0.1", 7496, clientId=abs(hash(ticker)) % 9000)
 
-    secType, exchange, currency = CONTRACT_MAP[ticker]
+    secType, exchange, currency = TICKER_MAP[ticker]
     if secType == "Stock":
         contract = Stock(ticker, exchange, currency)
     else:
@@ -176,7 +176,7 @@ def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True):
         ib.connect("127.0.0.1", 7496, clientId=cid)
         print(f"[run_timebands_30m] Connected to IB (clientId={cid})")
 
-        stype, exch, curr = CONTRACT_MAP[ticker]
+        stype, exch, curr = TICKER_MAP[ticker]
         contract = Stock(ticker, exch, curr) if stype == "Stock" else Index(ticker, exch)
 
         print("[run_timebands_30m] Requesting 30m bars...")

@@ -5,12 +5,28 @@ TARGET_LOOP_SECONDS = 60.0
 
 
 
-CONTRACT_MAP = {
+TICKER_MAP = {
     "SPY": ("Stock", "SMART", "USD"),
     # "QQQ": ("Stock", "SMART", "USD")
     # ,
     # "DIA": ("Stock", "SMART", "USD"),
     # "IWM": ("Stock", "SMART", "USD"),
+}
+
+
+CONTRACT_MAP = {
+    "ES": {
+        "symbol": "ES",
+        "exchange": "CME",
+        "currency": "USD",
+        "multiplier": 50,    # Each ES tick = $12.50 (0.25 x 50)
+    },
+    "MES": {
+        "symbol": "MES",
+        "exchange": "CME",
+        "currency": "USD",
+        "multiplier": 5,     # Each MES tick = $1.25 (0.25 x 5)
+    }
 }
 
 

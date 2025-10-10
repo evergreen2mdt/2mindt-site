@@ -6,10 +6,11 @@ from datetime import datetime
 
 # === Gap Analysis ===
 from gap_functions import get_ib_data, run_gap_analysis_for_contracts
-from config import CONTRACT_MAP
+from config import TICKER_MAP
 # === Options / Market (use cowpie) ===
 from options_functions import run_options, is_market_open
 from config import DEFAULT_START_DATE
+from scripts.config import TICKER_MAP
 # === Volume / Timebands ===
 from volume_functions import run_timebands_30m
 
@@ -21,8 +22,8 @@ from config import TARGET_LOOP_SECONDS
 def main():
     # === Step 0: Historical gap analysis ===
     try:
-        dfs = get_ib_data(list(CONTRACT_MAP.keys()), start_date=DEFAULT_START_DATE)
-        results = run_gap_analysis_for_contracts(CONTRACT_MAP, dfs)
+        dfs = get_ib_data(list(TICKER_MAP.keys()), start_date=DEFAULT_START_DATE)
+        results = run_gap_analysis_for_contracts(TICKER_MAP, dfs)
         print("Gap analysis complete:", results)
     except Exception as e:
         print(f"Gap analysis failed: {e}")
@@ -48,7 +49,7 @@ def main():
 
         # Step 3: Timebands
         try:
-            for ticker in CONTRACT_MAP:
+            for ticker in TICKER_MAP:
                 run_timebands_30m(
                     ticker,
                     days=20,

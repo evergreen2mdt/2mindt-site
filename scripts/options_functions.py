@@ -28,7 +28,7 @@ from openpyxl.utils import get_column_letter
 # =============================================================================
 # ============================ CONTRACT MAP ===================================
 # =============================================================================
-from config import CONTRACT_MAP
+from config import TICKER_MAP
 from config import DEFAULT_START_DATE
 
 # =============================================================================
@@ -652,12 +652,12 @@ def format_probabilities_in_workbook(wb):
 from dropbox_utils import upload_file
 from config import get_dropbox_path
 
-def run_options(contract_map=CONTRACT_MAP, start_date=DEFAULT_START_DATE):
+def run_options(ticker_map=TICKER_MAP, start_date=DEFAULT_START_DATE):
     now = pd.Timestamp.now().tz_localize(None)
     today = now.normalize()
     timestamp_str = now.strftime("%Y-%m-%d_%a_%H-%M").lower()
 
-    for ticker in contract_map:
+    for ticker in ticker_map:
         print(f"\n=== {ticker} ===")
         tkr_obj, spot_price = get_yf_spot_price(ticker)
         if tkr_obj is None or spot_price is None:

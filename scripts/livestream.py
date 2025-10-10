@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import plotly.express as px
 import streamlit as st
 
-from config import TARGET_LOOP_SECONDS, get_dropbox_path, CONTRACT_MAP
+from config import TARGET_LOOP_SECONDS, get_dropbox_path, TICKER_MAP
 from dropbox_utils import get_dropbox_client
 
 
@@ -990,9 +990,9 @@ else:
 st.title("Multi-Ticker Dashboard")
 
 # === Tabs ===
-tabs = st.tabs(list(CONTRACT_MAP.keys()) + ["Glossary"])
+tabs = st.tabs(list(TICKER_MAP.keys()) + ["Glossary"])
 
-for tab, ticker in zip(tabs, list(CONTRACT_MAP.keys()) + ["Glossary"]):
+for tab, ticker in zip(tabs, list(TICKER_MAP.keys()) + ["Glossary"]):
     with tab:
         if ticker == "Glossary":
             st.title("Glossary")
