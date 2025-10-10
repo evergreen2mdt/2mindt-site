@@ -7,10 +7,10 @@ TARGET_LOOP_SECONDS = 60.0
 
 CONTRACT_MAP = {
     "SPY": ("Stock", "SMART", "USD"),
-    "QQQ": ("Stock", "SMART", "USD")
-    ,
-    "DIA": ("Stock", "SMART", "USD"),
-    "IWM": ("Stock", "SMART", "USD"),
+    # "QQQ": ("Stock", "SMART", "USD")
+    # ,
+    # "DIA": ("Stock", "SMART", "USD"),
+    # "IWM": ("Stock", "SMART", "USD"),
 }
 
 

@@ -130,34 +130,56 @@ class LiveStreamDashboard:
         self.ticker = ticker.upper()
         self.dbx = get_dropbox_client()
         self.paths = get_paths(ticker)
-        self.snapshot_path = self._get_latest_snapshot()
-        self.snapshot_timestamp = self._get_snapshot_timestamp()
+        self.snapshot_path = None  # Delay initialization
+
+    def _format_snapshot_label(self, path: str) -> str:
+        if not path:
+            return "No snapshot"
+        fname = os.path.basename(path)
+        label = fname.replace(f"{self.ticker.lower()}_options_data_",
+                              "").replace(".xlsx", "")
+        parts = label.rsplit("_", 1)
+        if len(parts) == 2:
+            parts[1] = parts[1].replace("-", ":")
+            label = " ".join(parts)
+        return label
 
     def _get_latest_snapshot(self):
-        """Return latest options Excel filename from Dropbox folder."""
-        options_dir = self.paths["options_dir"]  # e.g. /spy/spy-options-data/
+        options_dir = self.paths["options_dir"]
         try:
+            all_entries = []
             res = self.dbx.files_list_folder(options_dir)
-            files = [
-                e.name for e in res.entries
+            all_entries.extend(res.entries)
+            while res.has_more:
+                res = self.dbx.files_list_folder_continue(res.cursor)
+                all_entries.extend(res.entries)
+
+            entries = [
+                (e.client_modified, e.name)
+                for e in all_entries
                 if e.name.endswith(
                     ".xlsx") and f"{self.ticker.lower()}_options_data" in e.name
             ]
+            entries.sort(reverse=True)
+            files = [name for _, name in entries]
+
+            # st.markdown("**Available snapshot files:**")
+            # for f in files[:10]:
+            #     st.write(f)
+            # st.write(f"Total files found: {len(files)}")
+
             if not files:
                 return None
-            files.sort(reverse=True)
-            latest = files[0]
-            return f"{options_dir}{latest}"
+
         except Exception as e:
             st.error(f"Dropbox listing failed for {self.ticker}: {e}")
             return None
 
-        # --- slider with labels, fixing time formatting ---
+        # build labels for slider
         labels = []
         for f in files:
             label = f.replace(f"{self.ticker.lower()}_options_data_",
                               "").replace(".xlsx", "")
-            # turn "..._16-16" into "... 16:16"
             if "_" in label:
                 parts = label.rsplit("_", 1)
                 if len(parts) == 2 and "-" in parts[1]:
@@ -168,10 +190,51 @@ class LiveStreamDashboard:
         chosen_label = st.select_slider(
             f"{self.ticker} snapshot",
             options=labels,
-            value=labels[0]  # default = most recent
+            value=labels[0],
+            key=f"{self.ticker}_snapshot"
         )
         chosen = files[labels.index(chosen_label)]
-        return os.path.join(options_dir, chosen)
+        return f"{options_dir}{chosen}"
+
+    # def _get_latest_snapshot(self):
+    #     """Return latest options Excel filename from Dropbox folder."""
+    #     options_dir = self.paths["options_dir"]  # e.g. /spy/spy-options-data/
+    #     try:
+    #         res = self.dbx.files_list_folder(options_dir)
+    #         files = [
+    #             e.name for e in res.entries
+    #             if e.name.endswith(
+    #                 ".xlsx") and f"{self.ticker.lower()}_options_data" in e.name
+    #         ]
+    #         if not files:
+    #             return None
+    #         files.sort(reverse=True)
+    #         latest = files[0]
+    #         return f"{options_dir}{latest}"
+    #     except Exception as e:
+    #         st.error(f"Dropbox listing failed for {self.ticker}: {e}")
+    #         return None
+    #
+    #     # --- slider with labels, fixing time formatting ---
+    #     labels = []
+    #     for f in files:
+    #         label = f.replace(f"{self.ticker.lower()}_options_data_",
+    #                           "").replace(".xlsx", "")
+    #         # turn "..._16-16" into "... 16:16"
+    #         if "_" in label:
+    #             parts = label.rsplit("_", 1)
+    #             if len(parts) == 2 and "-" in parts[1]:
+    #                 parts[1] = parts[1].replace("-", ":")
+    #                 label = " ".join(parts)
+    #         labels.append(label)
+    #
+    #     chosen_label = st.select_slider(
+    #         f"{self.ticker} snapshot",
+    #         options=labels,
+    #         value=labels[0]  # default = most recent
+    #     )
+    #     chosen = files[labels.index(chosen_label)]
+    #     return os.path.join(options_dir, chosen)
 
     def _get_snapshot_timestamp(self):
         if not self.snapshot_path:
@@ -188,8 +251,10 @@ class LiveStreamDashboard:
 
     def render_header(self):
         st.title(f"{self.ticker} Targets")
-        if self.snapshot_timestamp:
-            st.markdown(f"**Snapshot:** `{self.snapshot_timestamp}`")
+        if self.snapshot_path:
+            st.markdown(
+                f"**Snapshot:** `{self._format_snapshot_label(self.snapshot_path)}`")
+
             if self.ticker == "SPY":
                 st.info(
                     "SPY → ES (E-mini S&P 500):\n\n1 SPY pt ≈ 10 ES pts • 1 ES pt = 4 ticks = \$12.50 • 1 SPY pt ≈ \$500")
@@ -206,50 +271,198 @@ class LiveStreamDashboard:
                 st.info(
                     "IWM → RTY (E-mini Russell 2000):\n\n1 IWM pt ≈ 10 RTY pts • 1 RTY pt = 10 ticks = \$50 • 1 IWM pt ≈ \$500")
 
+    # def render_gap_targets(self):
+    #     try:
+    #         df_gap = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "All Data")
+    #         df_gap["date"] = pd.to_datetime(df_gap["date"], errors="coerce").dt.date
+    #         today = pd.Timestamp.now(tz=ZoneInfo("America/New_York")).date()
+    #         today_target = df_gap[df_gap["date"] == today].copy()
+    #         if today_target.empty:
+    #             st.info("No target row for today. Showing latest available.")
+    #             today_target = df_gap.sort_values("date", ascending=False).head(1).copy()
+    #
+    #         # Load supporting sheets
+    #         df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
+    #                                           "Gap Type Stats (DAYS)")
+    #         df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
+    #                                           "Days to Target")
+    #         df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
+    #                                          "MAM (PTS)")
+    #         df_mam_days = read_excel_from_dropbox(self.dbx,
+    #                                               self.paths["gaps_file"],
+    #                                               "MAM (DAYS)")
+    #
+    #         st.subheader("Today's Target Data")
+    #         st.dataframe(today_target[
+    #             ["date", "gap_type", "open", "previous_close", "gap value"]
+    #         ].rename(columns={
+    #             "date": "Date", "gap_type": "Gap Type", "open": "Open",
+    #             "previous_close": "Previous Close", "gap value": "Gap Value"
+    #         }), width="stretch")
+    #
+    #         st.subheader("Days to Target (Stats in Days)")
+    #         stats_table = df_days[
+    #             df_days["gap_type"].isin(today_target["gap_type"])]
+    #         st.dataframe(stats_table, width="stretch")
+    #
+    #         st.subheader("Max Adverse Movement Data (PTS)")
+    #         mam_pts = df_mam[df_mam["gap_type"].isin(today_target["gap_type"])]
+    #         st.dataframe(mam_pts, width="stretch")
+    #
+    #         st.subheader("Max Adverse Movement Data (DAYS)")
+    #         mam_days = df_mam_days[
+    #             df_mam_days["gap_type"].isin(today_target["gap_type"])]
+    #         st.dataframe(mam_days, width="stretch")
+    #
+    #         return today_target
+    #     except Exception as e:
+    #         st.error(f"Gap load failed: {e}")
+    #         return None
+
+    # def render_gap_targets(self):
+    #     """Render today's gap target and include all unhit targets for context."""
+    #     try:
+    #         df_gap = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "All Data")
+    #         if df_gap.empty:
+    #             st.info("No gap data available.")
+    #             return None
+    #
+    #         # --- Normalize dates ---
+    #         df_gap["date"] = pd.to_datetime(df_gap["date"], errors="coerce").dt.date
+    #         df_gap["target_achieved_date"] = pd.to_datetime(
+    #             df_gap.get("target_achieved_date"), errors="coerce"
+    #         ).dt.date
+    #
+    #         today = pd.Timestamp.now(tz=ZoneInfo("America/New_York")).date()
+    #
+    #         # --- Keep unhit targets and today's entry (even if hit) ---
+    #         mask_unhit = df_gap["target_achieved_date"].isna()
+    #         mask_today = df_gap["date"] == today
+    #         df_filtered = df_gap[mask_unhit | mask_today].copy()
+    #
+    #         if df_filtered.empty:
+    #             st.info("No unhit or current targets to display.")
+    #             return None
+    #
+    #         # --- Today’s target ---
+    #         today_target = df_filtered[df_filtered["date"] == today]
+    #         if today_target.empty:
+    #             st.info("No target row for today. Showing latest available.")
+    #             today_target = df_filtered.sort_values("date", ascending=False).head(1).copy()
+    #
+    #         # --- Load supporting sheets ---
+    #         df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "Gap Type Stats (DAYS)")
+    #         df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "Days to Target")
+    #         df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "MAM (PTS)")
+    #         df_mam_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "MAM (DAYS)")
+    #
+    #         # --- Display filtered set ---
+    #         st.subheader("Today's Target + Unhit Gaps")
+    #         st.dataframe(
+    #             df_filtered[["date", "gap_type", "open", "previous_close", "gap value"]]
+    #             .rename(columns={
+    #                 "date": "Date",
+    #                 "gap_type": "Gap Type",
+    #                 "open": "Open",
+    #                 "previous_close": "Previous Close",
+    #                 "gap value": "Gap Value"
+    #             }),
+    #             width="stretch"
+    #         )
+    #
+    #         # --- Days-to-Target (Stats in Days) ---
+    #         st.subheader("Days to Target (Stats in Days)")
+    #         stats_table = df_days[df_days["gap_type"].isin(df_filtered["gap_type"])]
+    #         st.dataframe(stats_table, width="stretch")
+    #
+    #         # --- MAM (PTS) ---
+    #         st.subheader("Max Adverse Movement Data (PTS)")
+    #         mam_pts = df_mam[df_mam["gap_type"].isin(df_filtered["gap_type"])]
+    #         st.dataframe(mam_pts, width="stretch")
+    #
+    #         # --- MAM (DAYS) ---
+    #         st.subheader("Max Adverse Movement Data (DAYS)")
+    #         mam_days = df_mam_days[df_mam_days["gap_type"].isin(df_filtered["gap_type"])]
+    #         st.dataframe(mam_days, width="stretch")
+    #
+    #         return today_target if not today_target.empty else None
+    #
+    #     except Exception as e:
+    #         st.error(f"Gap load failed: {e}")
+    #         return None
+
     def render_gap_targets(self):
+        """Render today's gap target and recent unhit targets (≤10 days old)."""
         try:
             df_gap = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "All Data")
+            if df_gap.empty:
+                st.info("No gap data available.")
+                return None
+
+            # --- Normalize dates ---
             df_gap["date"] = pd.to_datetime(df_gap["date"], errors="coerce").dt.date
+            df_gap["target_achieved_date"] = pd.to_datetime(
+                df_gap.get("target_achieved_date"), errors="coerce"
+            ).dt.date
+
             today = pd.Timestamp.now(tz=ZoneInfo("America/New_York")).date()
-            today_target = df_gap[df_gap["date"] == today].copy()
+            cutoff = today - pd.Timedelta(days=10)
+
+            # --- Conditions ---
+            mask_recent = df_gap["date"] >= cutoff
+            mask_unhit = df_gap["target_achieved_date"].isna()
+            mask_today = df_gap["date"] == today
+
+            # --- Filter: unhit within 10 days + today's target ---
+            df_filtered = df_gap[(mask_recent & mask_unhit) | mask_today].copy()
+
+            if df_filtered.empty:
+                st.info("No recent unhit or current targets to display.")
+                return None
+
+            # --- Today's target(s) ---
+            today_target = df_filtered[df_filtered["date"] == today]
             if today_target.empty:
                 st.info("No target row for today. Showing latest available.")
-                today_target = df_gap.sort_values("date", ascending=False).head(1).copy()
+                today_target = df_filtered.sort_values("date", ascending=False).head(1).copy()
 
-            # Load supporting sheets
-            df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
-                                              "Gap Type Stats (DAYS)")
-            df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
-                                              "Days to Target")
-            df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
-                                             "MAM (PTS)")
-            df_mam_days = read_excel_from_dropbox(self.dbx,
-                                                  self.paths["gaps_file"],
-                                                  "MAM (DAYS)")
+            # --- Load supporting sheets ---
+            df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "Gap Type Stats (DAYS)")
+            df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "Days to Target")
+            df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "MAM (PTS)")
+            df_mam_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "MAM (DAYS)")
 
-            st.subheader("Today's Target Data")
-            st.dataframe(today_target[
-                ["date", "gap_type", "open", "previous_close", "gap value"]
-            ].rename(columns={
-                "date": "Date", "gap_type": "Gap Type", "open": "Open",
-                "previous_close": "Previous Close", "gap value": "Gap Value"
-            }), width="stretch")
+            # --- Display filtered set ---
+            st.subheader("Unhit Targets (Last 10 Days)")
+            st.dataframe(
+                df_filtered[["date", "gap_type", "open", "previous_close", "gap value"]]
+                .rename(columns={
+                    "date": "Date",
+                    "gap_type": "Gap Type",
+                    "open": "Open",
+                    "previous_close": "Previous Close",
+                    "gap value": "Gap Value"
+                }),
+                width="stretch"
+            )
 
+            # --- Days-to-Target (Stats in Days) ---
             st.subheader("Days to Target (Stats in Days)")
-            stats_table = df_days[
-                df_days["gap_type"].isin(today_target["gap_type"])]
+            stats_table = df_days[df_days["gap_type"].isin(df_filtered["gap_type"])]
             st.dataframe(stats_table, width="stretch")
 
+            # --- MAM (PTS) ---
             st.subheader("Max Adverse Movement Data (PTS)")
-            mam_pts = df_mam[df_mam["gap_type"].isin(today_target["gap_type"])]
+            mam_pts = df_mam[df_mam["gap_type"].isin(df_filtered["gap_type"])]
             st.dataframe(mam_pts, width="stretch")
 
+            # --- MAM (DAYS) ---
             st.subheader("Max Adverse Movement Data (DAYS)")
-            mam_days = df_mam_days[
-                df_mam_days["gap_type"].isin(today_target["gap_type"])]
+            mam_days = df_mam_days[df_mam_days["gap_type"].isin(df_filtered["gap_type"])]
             st.dataframe(mam_days, width="stretch")
 
-            return today_target
+            return today_target if not today_target.empty else None
+
         except Exception as e:
             st.error(f"Gap load failed: {e}")
             return None
@@ -723,6 +936,8 @@ class LiveStreamDashboard:
             st.info(f"Timebands not available: {e}")
 
     def render_all(self):
+        self.snapshot_path = self._get_latest_snapshot()
+        st.write("Using snapshot file:", self.snapshot_path)  # ← move here
         self.render_header()
         today_target = self.render_gap_targets()
         if today_target is not None:

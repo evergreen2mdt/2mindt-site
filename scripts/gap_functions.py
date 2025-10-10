@@ -340,6 +340,25 @@ def format_sheet(wb, sheet_name):
                 pass
         ws.column_dimensions[col_letter].width = max_length + 2
 
+# --- Unhit Target Stats (10-day window) ---
+def get_recent_unhit_targets(df: pd.DataFrame, days: int = 10):
+    """Return count and details of unhit targets within the last N days."""
+    recent = df.copy()
+    recent['date'] = pd.to_datetime(recent['date'])
+    cutoff = recent['date'].max() - pd.Timedelta(days=days)
+    recent = recent[recent['date'] >= cutoff]
+
+    unhit = recent[recent['hit'] == False]
+    summary = (
+        unhit.groupby('gap_type')
+        .agg(count_unhit=('date', 'count'),
+             last_occurrence=('date', 'max'))
+        .reset_index()
+        .sort_values('count_unhit', ascending=False)
+    )
+    return summary
+
+
 def format_probabilities_in_workbook(wb):
     if "Days to Target" in wb.sheetnames:
         ws = wb["Days to Target"]
