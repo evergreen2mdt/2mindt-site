@@ -4,6 +4,7 @@ import logging
 import os
 from copy import copy
 from typing import Optional
+import math
 
 
 # === Core Data & Stats Libraries ===
@@ -457,7 +458,7 @@ def jump_diffusion_touch_prob(row, lam=0.1, mu_j=-0.02, sigma_j=0.05, max_jumps=
     drift_adj = r - lam * kappa
     prob = 0.0
     for k in range(max_jumps + 1):
-        pk = np.exp(-lam*T) * (lam*T)**k / np.math.factorial(k)
+        pk = np.exp(-lam*T) * (lam*T)**k / math.factorial(k)
         sigma_eff = np.sqrt(sigma**2 + (k * sigma_j**2) / max(T, 1e-12))
         mu_eff = drift_adj + (k * mu_j) / max(T, 1e-12)
         d1 = (np.log(S/K) + (mu_eff + 0.5*sigma_eff**2)*T) / (sigma_eff * np.sqrt(T))
