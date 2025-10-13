@@ -10,7 +10,7 @@ from config import TICKER_MAP
 # === Options / Market (use cowpie) ===
 from options_functions import run_options, is_market_open
 from config import DEFAULT_START_DATE
-from scripts.config import TICKER_MAP
+#from scripts.config import TICKER_MAP
 # === Volume / Timebands ===
 from volume_functions import run_timebands_30m
 
