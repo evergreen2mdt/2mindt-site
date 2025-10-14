@@ -152,6 +152,119 @@ def get_paths(ticker: str):
         "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
     }
 
+def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
+    """
+    Show est_vol_at_close from ES and MES futures with ETF-style axis:
+    - All 30m bands labeled
+    - Date shown only once per day
+    - ETH shaded grey
+    - 20d avg baseline at 1.0
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import streamlit as st
+    from zoneinfo import ZoneInfo
+
+    if df.empty:
+        st.info("No futures data to display.")
+        return
+
+    fut_syms = ETF_TO_FUTURES.get(ticker, [])
+    if not fut_syms:
+        st.info("No futures mappings found.")
+        return
+
+    # --- Load each futures file ---
+    rows = []
+    for sym in fut_syms:
+        path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+        try:
+            tmp = dbx_read_excel(path, sheet_name="Timebands")
+            if tmp is None or tmp.empty:
+                continue
+            tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
+            tmp = tmp[tmp["date"].notna()].copy()
+            tmp["Root"] = sym.upper()
+            rows.append(tmp[["date", "band", "session", "est_vol_at_close", "Root"]])
+        except Exception as e:
+            st.warning(f"{sym}: {e}")
+
+    if not rows:
+        st.info("No futures timeband data found.")
+        return
+
+    df = pd.concat(rows, ignore_index=True)
+    df["band_start"] = df["band"].str.split("–").str[0]
+    df["band_start"] = pd.to_datetime(df["band_start"], format="%H:%M", errors="coerce")
+    df = df.sort_values(["date", "band_start"])
+
+    # --- Match ETF chart: last 3 trading days ---
+    all_dates = sorted(df["date"].unique())
+    keep_dates = all_dates[-3:] if len(all_dates) >= 3 else all_dates
+    df = df[df["date"].isin(keep_dates)]
+
+    # --- Align by band across all roots ---
+    pivot = (
+        df.pivot_table(
+            index=["date", "band", "session"],
+            columns="Root",
+            values="est_vol_at_close",
+            aggfunc="mean"
+        )
+        .reset_index()
+        .sort_values(["date", "band"])
+    )
+    pivot.columns.name = None
+
+    # --- Build x-axis labels (one date per day) ---
+    x_labels = []
+    prev_date = None
+    for _, r in pivot.iterrows():
+        label = r["band"].split("–")[0]
+        if r["date"] != prev_date:
+            label = f"\n{r['date'].strftime('%Y-%m-%d')}\n{label}"
+            prev_date = r["date"]
+        x_labels.append(label)
+
+    x_vals = np.arange(len(x_labels))
+
+    # --- Plot ---
+    fig, ax = plt.subplots(figsize=(14, 5))
+    width = 0.4
+    roots = [c for c in pivot.columns if c not in ["date", "band", "session"]]
+    colors = ["#1f77b4", "#66b3ff"]
+
+    for i, root in enumerate(roots):
+        y = pivot[root].fillna(0).values
+        offset = (i - 0.5) * width
+        ax.bar(x_vals + offset, y, width=width, label=root, color=colors[i % len(colors)], alpha=0.9)
+
+    # --- Baseline (1.0 = 20-day avg) ---
+    ax.axhline(1.0, linestyle="--", color="gray", linewidth=1, label="20d avg (×1.0)")
+
+    # --- Shade ETH bands ---
+    for i, sess in enumerate(pivot["session"]):
+        if sess == "ETH":
+            ax.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.15)
+
+    # --- Format axis ---
+    ax.set_xticks(x_vals)
+    ax.set_xticklabels(x_labels, rotation=90, fontsize=7)
+    ax.set_ylabel("Est. Volume Ratio (×)")
+    ax.set_title(f"{ticker} Futures Estimated Volume at Close (× vs 20-Day Avg)")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.6)
+    ax.legend(fontsize=8)
+    plt.tight_layout()
+
+    st.pyplot(fig)
+    plt.close(fig)
+
+
+
+
+
+
 
 
 
@@ -816,7 +929,7 @@ class LiveStreamDashboard:
             st.subheader("Timebands")
             st.dataframe(df_prev, width="stretch")
 
-            # ===== Futures stacked volume
+        # ===== Futures Volume Comparison (Side-by-Side)
             try:
                 fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
                 if fut_syms:
@@ -824,94 +937,51 @@ class LiveStreamDashboard:
                     for sym in fut_syms:
                         path = f"/{self.ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
                         fdf = dbx_read_excel(path, sheet_name="Timebands")
-                        fdf["date"] = pd.to_datetime(fdf.get("date"),
-                                                     errors="coerce")
-                        fdf = fdf[fdf["date"].notna()].copy()
-                        fdf["date"] = fdf["date"].dt.date
-                        fdf["timestamp"] = pd.to_datetime(fdf.get("timestamp"),
-                                                          errors="coerce")
-                        fdf = fdf[fdf["date"].isin(recent_dates)].copy()
-
-                        vol_cols = [c for c in fdf.columns if c.endswith(
-                            "_volume") and c.lower() != "total_volume"]
-                        keep = ["date", "band", "timestamp"] + vol_cols
-                        fut_frames.append(fdf[keep])
-
+                        if fdf is not None and not fdf.empty:
+                            fut_frames.append(fdf)
                     if fut_frames:
-                        from functools import reduce
-                        key = ["date", "band", "timestamp"]
-
-                        left = df_plot[["date", "band", "timestamp"]].copy()
-                        left["date"] = left["date"].dt.date
-
-                        fut_all = reduce(
-                            lambda a, b: pd.merge(a, b, on=key, how="outer"),
-                            fut_frames)
-                        fut_all = pd.merge(left, fut_all, on=key,
-                                           how="left").fillna(0.0)
-
-                        vol_cols_all = [c for c in fut_all.columns if
-                                        c.endswith(
-                                            "_volume") and c.lower() != "total_volume"]
-                        if vol_cols_all:
-                            fig2, ax = plt.subplots(figsize=(14, 3.5))
-                            x_vals2 = np.arange(len(fut_all))
-                            bottom = np.zeros(len(fut_all))
-                            for col in vol_cols_all:
-                                vals = pd.to_numeric(fut_all[col],
-                                                     errors="coerce").fillna(
-                                    0).values
-                                ax.bar(x_vals2, vals, bottom=bottom, label=col,
-                                       alpha=0.8)
-                                bottom += vals
-                            ax.set_ylabel("Futures Volume (stacked)")
-                            ax.set_xticks(x_vals2)
-                            ax.set_xticklabels(xticks, rotation=90, fontsize=7)
-                            ax.grid(True, linestyle="--", alpha=0.6)
-                            ax.legend(ncols=4, fontsize=7)
-                            if "session" in df_plot.columns:
-                                for i, sess in enumerate(df_plot["session"]):
-                                    if sess == "ETH":
-                                        ax.axvspan(i - 0.5, i + 0.5,
-                                                   color="grey", alpha=0.1)
-                            st.pyplot(fig2)
-                            plt.close(fig2)
+                        fut_df = pd.concat(fut_frames, ignore_index=True)
+                        render_futures_volume_chart(fut_df, self.ticker)
+                    else:
+                        st.info("No futures volume data available.")
             except Exception as e:
-                st.warning(f"Futures volume plot skipped: {e}")
+                st.warning(f"Futures volume chart skipped: {e}")
 
         except Exception as e:
             st.error(f"Timebands render failed: {e}")
 
         # ===== Futures Timebands Table (aggregate only, no OHLC or per-contract columns) =====
+        # ===== Futures Timebands: Separate Tables for ES and MES =====
         try:
             fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
             if fut_syms:
-                fut_frames = []
                 for sym in fut_syms:
                     path = f"/{self.ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
                     fdf = dbx_read_excel(path, sheet_name="Timebands")
+
+                    if fdf is None or fdf.empty:
+                        st.info(f"No {sym} timeband data available.")
+                        continue
+
                     fdf["date"] = pd.to_datetime(fdf.get("date"),
                                                  errors="coerce")
                     fdf = fdf[fdf["date"].notna()].copy()
                     fdf["date"] = fdf["date"].dt.date
 
-                    # keep only final aggregate columns — no ohlc, no per-contract vol/barcount
+                    # Keep only aggregate columns (no OHLC, no per-contract)
                     keep_cols = [
                         "date", "timestamp", "generated_at", "granularity",
                         "session", "band", "Total_barCount", "Total_volume",
-                        "avg_20d", "ratio_to_avg_20d"
+                        "avg_20d", "ratio_to_avg_20d", "est_vol_at_close"
                     ]
                     fdf = fdf[[c for c in keep_cols if c in fdf.columns]]
-                    fut_frames.append(fdf)
+                    fdf = fdf.sort_values(["date", "timestamp"],
+                                          ascending=[False, False])
 
-                if fut_frames:
-                    fut_table = pd.concat(fut_frames, ignore_index=True)
-                    fut_table = fut_table.sort_values(["date", "timestamp"],
-                                                      ascending=[False, False])
-                    st.subheader("Futures Timebands")
-                    st.dataframe(fut_table, width="stretch")
-                else:
-                    st.info("No futures timeband data available.")
+                    st.subheader(f"{sym} Futures Timebands")
+                    st.dataframe(fdf, width="stretch")
+            else:
+                st.info("No futures mappings found for this ticker.")
         except Exception as e:
             st.warning(f"Futures timebands table skipped: {e}")
 

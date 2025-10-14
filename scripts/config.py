@@ -1,14 +1,14 @@
 import os
 
 # config.py
-TARGET_LOOP_SECONDS = 60.0
+TARGET_LOOP_SECONDS = 100.0
 
 
 
 TICKER_MAP = {
     "SPY": ("Stock", "SMART", "USD")
-    ,
-    "QQQ": ("Stock", "SMART", "USD")
+    # ,
+    # "QQQ": ("Stock", "SMART", "USD")
     # ,
     # "DIA": ("Stock", "SMART", "USD")
     # ,

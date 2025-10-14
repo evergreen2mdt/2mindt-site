@@ -256,10 +256,11 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
                                       tzinfo=tz)
             if start_dt <= now < end_dt:
                 elapsed = max(0.01, (now - start_dt).total_seconds() / 60)
-                projected = (r["Total_volume"] / elapsed) * 30
+                projected = (r["volume"] / elapsed) * 30
                 avg20 = r["avg_20d"] if r["avg_20d"] else np.nan
                 pivot.at[
                     i, "est_vol_at_close"] = projected / avg20 if avg20 and avg20 > 0 else np.nan
+
                 break
     except Exception:
         pass
@@ -287,7 +288,7 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
             + ordered_vol_cols
             + ["volume"]  # rename later as Total_volume
             + ordered_bar_cols
-            + ["barCount", "avg_20d", "ratio_to_avg_20d"]
+            + ["barCount", "avg_20d", "ratio_to_avg_20d", "est_vol_at_close"]
     )
 
     pivot = pivot[[c for c in ordered_cols if c in pivot.columns]]
