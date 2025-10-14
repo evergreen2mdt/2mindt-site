@@ -1,6 +1,6 @@
 # === futures_functions.py ===
 from ib_insync import IB, Future
-from datetime import datetime
+
 import pandas as pd
 import os
 from openpyxl import load_workbook
@@ -12,7 +12,8 @@ from openpyxl.utils import get_column_letter
 from config import TICKER_MAP, CONTRACT_MAP, ETF_TO_FUTURES
 from dropbox_utils import upload_file
 from config import get_dropbox_path
-
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # ---------- Helpers ----------
 
@@ -263,6 +264,31 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
         lambda x: x.rolling(20, min_periods=1).mean()
     )
     pivot["ratio_to_avg_20d"] = pivot["volume"] / pivot["avg_20d"]
+
+    tz = ZoneInfo("America/New_York")
+    now = datetime.now(tz)
+    # Initialize same as ratio
+    pivot["est_vol_at_close"] = pivot["ratio_to_avg_20d"]
+
+    # For the active timeband (the one currently open)
+    try:
+        for i, r in pivot.iterrows():
+            start_str, end_str = r["band"].split("–")
+            start_dt = datetime.combine(r["date"],
+                                        pd.to_datetime(start_str).time(),
+                                        tzinfo=tz)
+            end_dt = datetime.combine(r["date"], pd.to_datetime(end_str).time(),
+                                      tzinfo=tz)
+            if start_dt <= now < end_dt:
+                elapsed = max(0.01, (now - start_dt).total_seconds() / 60)
+                projected = (r["Total_volume"] / elapsed) * 30
+                avg20 = r["avg_20d"] if r["avg_20d"] else np.nan
+                pivot.at[
+                    i, "est_vol_at_close"] = projected / avg20 if avg20 and avg20 > 0 else np.nan
+                break
+    except Exception:
+        pass
+
 
     # --- Determine chronological contract order using expiry dates ---
     contract_exp_map = {
