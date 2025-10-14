@@ -76,59 +76,6 @@ def _fetch_30m(ticker: str, days: int) -> pd.DataFrame:
     return df
 
 
-# # ----- Add band labels -----
-# def _add_bands(df: pd.DataFrame) -> pd.DataFrame:
-#     ts = pd.to_datetime(df["timestamp"])
-#     start = ts
-#     end = start + pd.Timedelta(minutes=30)
-#     out = df.copy()
-#     out["date"] = start.dt.date
-#     out["band"] = start.dt.strftime("%H:%M") + "–" + end.dt.strftime("%H:%M")
-#     out["start"] = start.dt.strftime("%H:%M")
-#     out["end"] = end.dt.strftime("%H:%M")
-#     out["granularity"] = "30min"
-#     out["generated_at"] = datetime.now()
-#     out["session"] = out["band"].map(SESSION_MAP).fillna("OTHER")
-#     return out[
-#         ["timestamp","date","session","band","start","end",
-#          "open","high","low","close","volume","barCount","average",
-#          "granularity","generated_at"]
-#     ]
-#
-#
-# # ----- Densify -----
-# def _densify(out: pd.DataFrame, include_rth: bool, include_eth: bool) -> pd.DataFrame:
-#     if out.empty:
-#         return out
-#     dates = sorted(pd.unique(out["date"]))
-#     allowed = set()
-#     if include_rth: allowed |= RTH_SET
-#     if include_eth: allowed |= ETH_SET
-#     allowed_list = [b for b in ALL_SET if (not allowed) or (b in allowed)]
-#
-#     grid = pd.MultiIndex.from_product([dates, allowed_list], names=["date","band"]).to_frame(index=False)
-#     full = grid.merge(out, on=["date","band"], how="left")
-#
-#     full["session"] = full["session"].fillna(full["band"].map(SESSION_MAP)).fillna("OTHER")
-#
-#     se = full["band"].str.split("–", n=1, expand=True)
-#     full["start"] = full["start"].fillna(se[0])
-#     full["end"]   = full["end"].fillna(se[1])
-#
-#     missing_ts = full["timestamp"].isna()
-#     full.loc[missing_ts, "timestamp"] = pd.to_datetime(
-#         full.loc[missing_ts, "date"].astype(str) + " " + full.loc[missing_ts, "start"], errors="coerce"
-#     )
-#
-#     if "volume" in full:
-#         full["volume"] = pd.to_numeric(full["volume"], errors="coerce").fillna(0).astype(int)
-#
-#     full["granularity"] = "30min"
-#     full["generated_at"] = datetime.now()
-#     full = full.sort_values(["date","start"]).reset_index(drop=True)
-#     return full
-
-
 # ----- Excel formatting -----
 def format_sheet(wb, sheetname: str):
     ws = wb[sheetname]
@@ -222,20 +169,20 @@ def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True):
         df["ratio_to_avg_20d"] = df["volume"] / df["avg_20d"]
 
         # --- Temporary local save ---
-        local_filename = f"{ticker.lower()}_timebands_history.xlsx"
+        # --- Dynamic per-ticker filenames (overwrite-safe) ---
+        filename = f"{ticker.lower()}_timeband_volume.xlsx"
+        local_filename = os.path.join(r"C:\2mdt\2mindt-site\scripts",
+                                      filename)
+
         with pd.ExcelWriter(local_filename, engine="openpyxl", mode="w") as w:
             df.to_excel(w, sheet_name="Timebands", index=False)
 
-
-        # --- Upload to Dropbox ---
         dropbox_path = get_dropbox_path(ticker, "timebands",
-                                        f"{ticker.lower()}_timebands_history.xlsx")
-
-        upload_file(local_filename, dropbox_path)
-        print(f"[Dropbox] Uploaded {ticker} timebands → {dropbox_path}")
-        # --- Delete local temporary file ---
-
+                                        filename)  # e.g., /spy/spy-timebands/spy_timeband_volume.xlsx
+        upload_file(local_filename,
+                    dropbox_path)  # must use WriteMode("overwrite") inside upload_file
         os.remove(local_filename)
+
         print(f"[Local] Deleted temporary file: {local_filename}")
 
     finally:

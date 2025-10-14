@@ -1,3 +1,4 @@
+# --- stdlib
 import os
 import time
 import base64
@@ -5,14 +6,76 @@ from io import BytesIO
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+# --- third-party
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
 import streamlit as st
 
-from config import TARGET_LOOP_SECONDS, get_dropbox_path, TICKER_MAP
-from dropbox_utils import get_dropbox_client
+# --- project
+from config import (
+    ETF_TO_FUTURES,
+    TARGET_LOOP_SECONDS,
+    TICKER_MAP,
+    get_dropbox_path,
+)
+from dropbox_utils import (
+    get_dropbox_client,
+    read_excel as dbx_read_excel,
+)
+
+
+def load_futures_timebands(ticker: str):
+    """Load and merge all mapped futures roots (e.g., SPY → ES,MES)."""
+    roots = ETF_TO_FUTURES.get(ticker, [])
+    if not roots:
+        return None
+
+    meta = ["date", "timestamp", "generated_at", "granularity", "session", "band"]
+    frames = []
+
+    for sym in roots:
+        path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+        try:
+            df = dbx_read_excel(path, sheet_name="Timebands").copy()
+
+            # --- normalize keys ---
+            df["date"] = pd.to_datetime(df.get("date"), errors="coerce")
+            df = df[df["date"].notna()].copy()
+            df["timestamp"] = pd.to_datetime(df.get("timestamp"), errors="coerce")
+
+            # keep meta + all *_volume + Total_volume if present
+            vol_cols = [c for c in df.columns if c.endswith("_volume")]
+            keep = [c for c in meta if c in df.columns] + vol_cols
+            if "Total_volume" in df.columns:
+                keep.append("Total_volume")
+
+            frames.append(df[keep])
+        except Exception as e:
+            print(f"[futures] skip {sym}: {e}")
+
+    if not frames:
+        return None
+
+    # outer-merge on available meta keys
+    out = frames[0]
+    for nxt in frames[1:]:
+        keys = [k for k in meta if k in out.columns and k in nxt.columns]
+        out = pd.merge(out, nxt, on=keys, how="outer")
+
+    # stable sort then fill
+    sort_keys = [k for k in ["date", "timestamp"] if k in out.columns]
+    if sort_keys:
+        out = out.sort_values(sort_keys)
+    out = out.fillna(0)
+
+    # recompute combined total across all contract volumes
+    all_vol = [c for c in out.columns if c.endswith("_volume") and c.lower() != "total_volume"]
+    if all_vol:
+        out["Total_volume_all"] = out[all_vol].sum(axis=1)
+    return out
+
 
 
 def compute_relative_flow(current_volume: float,
@@ -86,7 +149,7 @@ def get_paths(ticker: str):
     return {
         "options_dir": f"/{t}/{t}-options-data/",
         "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
-        "timebands_file": f"/{t}/{t}-timebands/{t}_timebands_history.xlsx",
+        "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
     }
 
 
@@ -163,10 +226,6 @@ class LiveStreamDashboard:
             entries.sort(reverse=True)
             files = [name for _, name in entries]
 
-            # st.markdown("**Available snapshot files:**")
-            # for f in files[:10]:
-            #     st.write(f)
-            # st.write(f"Total files found: {len(files)}")
 
             if not files:
                 return None
@@ -195,46 +254,6 @@ class LiveStreamDashboard:
         )
         chosen = files[labels.index(chosen_label)]
         return f"{options_dir}{chosen}"
-
-    # def _get_latest_snapshot(self):
-    #     """Return latest options Excel filename from Dropbox folder."""
-    #     options_dir = self.paths["options_dir"]  # e.g. /spy/spy-options-data/
-    #     try:
-    #         res = self.dbx.files_list_folder(options_dir)
-    #         files = [
-    #             e.name for e in res.entries
-    #             if e.name.endswith(
-    #                 ".xlsx") and f"{self.ticker.lower()}_options_data" in e.name
-    #         ]
-    #         if not files:
-    #             return None
-    #         files.sort(reverse=True)
-    #         latest = files[0]
-    #         return f"{options_dir}{latest}"
-    #     except Exception as e:
-    #         st.error(f"Dropbox listing failed for {self.ticker}: {e}")
-    #         return None
-    #
-    #     # --- slider with labels, fixing time formatting ---
-    #     labels = []
-    #     for f in files:
-    #         label = f.replace(f"{self.ticker.lower()}_options_data_",
-    #                           "").replace(".xlsx", "")
-    #         # turn "..._16-16" into "... 16:16"
-    #         if "_" in label:
-    #             parts = label.rsplit("_", 1)
-    #             if len(parts) == 2 and "-" in parts[1]:
-    #                 parts[1] = parts[1].replace("-", ":")
-    #                 label = " ".join(parts)
-    #         labels.append(label)
-    #
-    #     chosen_label = st.select_slider(
-    #         f"{self.ticker} snapshot",
-    #         options=labels,
-    #         value=labels[0]  # default = most recent
-    #     )
-    #     chosen = files[labels.index(chosen_label)]
-    #     return os.path.join(options_dir, chosen)
 
     def _get_snapshot_timestamp(self):
         if not self.snapshot_path:
@@ -271,125 +290,6 @@ class LiveStreamDashboard:
                 st.info(
                     "IWM → RTY (E-mini Russell 2000):\n\n1 IWM pt ≈ 10 RTY pts • 1 RTY pt = 10 ticks = \$50 • 1 IWM pt ≈ \$500")
 
-    # def render_gap_targets(self):
-    #     try:
-    #         df_gap = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "All Data")
-    #         df_gap["date"] = pd.to_datetime(df_gap["date"], errors="coerce").dt.date
-    #         today = pd.Timestamp.now(tz=ZoneInfo("America/New_York")).date()
-    #         today_target = df_gap[df_gap["date"] == today].copy()
-    #         if today_target.empty:
-    #             st.info("No target row for today. Showing latest available.")
-    #             today_target = df_gap.sort_values("date", ascending=False).head(1).copy()
-    #
-    #         # Load supporting sheets
-    #         df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
-    #                                           "Gap Type Stats (DAYS)")
-    #         df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
-    #                                           "Days to Target")
-    #         df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"],
-    #                                          "MAM (PTS)")
-    #         df_mam_days = read_excel_from_dropbox(self.dbx,
-    #                                               self.paths["gaps_file"],
-    #                                               "MAM (DAYS)")
-    #
-    #         st.subheader("Today's Target Data")
-    #         st.dataframe(today_target[
-    #             ["date", "gap_type", "open", "previous_close", "gap value"]
-    #         ].rename(columns={
-    #             "date": "Date", "gap_type": "Gap Type", "open": "Open",
-    #             "previous_close": "Previous Close", "gap value": "Gap Value"
-    #         }), width="stretch")
-    #
-    #         st.subheader("Days to Target (Stats in Days)")
-    #         stats_table = df_days[
-    #             df_days["gap_type"].isin(today_target["gap_type"])]
-    #         st.dataframe(stats_table, width="stretch")
-    #
-    #         st.subheader("Max Adverse Movement Data (PTS)")
-    #         mam_pts = df_mam[df_mam["gap_type"].isin(today_target["gap_type"])]
-    #         st.dataframe(mam_pts, width="stretch")
-    #
-    #         st.subheader("Max Adverse Movement Data (DAYS)")
-    #         mam_days = df_mam_days[
-    #             df_mam_days["gap_type"].isin(today_target["gap_type"])]
-    #         st.dataframe(mam_days, width="stretch")
-    #
-    #         return today_target
-    #     except Exception as e:
-    #         st.error(f"Gap load failed: {e}")
-    #         return None
-
-    # def render_gap_targets(self):
-    #     """Render today's gap target and include all unhit targets for context."""
-    #     try:
-    #         df_gap = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "All Data")
-    #         if df_gap.empty:
-    #             st.info("No gap data available.")
-    #             return None
-    #
-    #         # --- Normalize dates ---
-    #         df_gap["date"] = pd.to_datetime(df_gap["date"], errors="coerce").dt.date
-    #         df_gap["target_achieved_date"] = pd.to_datetime(
-    #             df_gap.get("target_achieved_date"), errors="coerce"
-    #         ).dt.date
-    #
-    #         today = pd.Timestamp.now(tz=ZoneInfo("America/New_York")).date()
-    #
-    #         # --- Keep unhit targets and today's entry (even if hit) ---
-    #         mask_unhit = df_gap["target_achieved_date"].isna()
-    #         mask_today = df_gap["date"] == today
-    #         df_filtered = df_gap[mask_unhit | mask_today].copy()
-    #
-    #         if df_filtered.empty:
-    #             st.info("No unhit or current targets to display.")
-    #             return None
-    #
-    #         # --- Today’s target ---
-    #         today_target = df_filtered[df_filtered["date"] == today]
-    #         if today_target.empty:
-    #             st.info("No target row for today. Showing latest available.")
-    #             today_target = df_filtered.sort_values("date", ascending=False).head(1).copy()
-    #
-    #         # --- Load supporting sheets ---
-    #         df_roll = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "Gap Type Stats (DAYS)")
-    #         df_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "Days to Target")
-    #         df_mam = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "MAM (PTS)")
-    #         df_mam_days = read_excel_from_dropbox(self.dbx, self.paths["gaps_file"], "MAM (DAYS)")
-    #
-    #         # --- Display filtered set ---
-    #         st.subheader("Today's Target + Unhit Gaps")
-    #         st.dataframe(
-    #             df_filtered[["date", "gap_type", "open", "previous_close", "gap value"]]
-    #             .rename(columns={
-    #                 "date": "Date",
-    #                 "gap_type": "Gap Type",
-    #                 "open": "Open",
-    #                 "previous_close": "Previous Close",
-    #                 "gap value": "Gap Value"
-    #             }),
-    #             width="stretch"
-    #         )
-    #
-    #         # --- Days-to-Target (Stats in Days) ---
-    #         st.subheader("Days to Target (Stats in Days)")
-    #         stats_table = df_days[df_days["gap_type"].isin(df_filtered["gap_type"])]
-    #         st.dataframe(stats_table, width="stretch")
-    #
-    #         # --- MAM (PTS) ---
-    #         st.subheader("Max Adverse Movement Data (PTS)")
-    #         mam_pts = df_mam[df_mam["gap_type"].isin(df_filtered["gap_type"])]
-    #         st.dataframe(mam_pts, width="stretch")
-    #
-    #         # --- MAM (DAYS) ---
-    #         st.subheader("Max Adverse Movement Data (DAYS)")
-    #         mam_days = df_mam_days[df_mam_days["gap_type"].isin(df_filtered["gap_type"])]
-    #         st.dataframe(mam_days, width="stretch")
-    #
-    #         return today_target if not today_target.empty else None
-    #
-    #     except Exception as e:
-    #         st.error(f"Gap load failed: {e}")
-    #         return None
 
     def render_gap_targets(self):
         """Render today's gap target and recent unhit targets (≤10 days old)."""
@@ -816,124 +716,162 @@ class LiveStreamDashboard:
 
     def render_timebands(self):
         try:
-            tb = read_excel_from_dropbox(self.dbx, self.paths["timebands_file"], "Timebands")
-
-            # Force conversion to datetime, drop invalid
+            self.paths["timebands_file"] = get_dropbox_path(
+                self.ticker,
+                "timebands",
+                f"{self.ticker.lower()}_timeband_volume.xlsx",
+            )
+            tb = dbx_read_excel(self.paths["timebands_file"], sheet_name="Timebands")
             tb["date"] = pd.to_datetime(tb["date"], errors="coerce")
-
-            # Make sure we only use valid datetimes
             tb = tb[tb["date"].notna()].copy()
 
-            # Use most recent 3 available dates
             dates = sorted(tb["date"].dt.date.unique())
-            if len(dates) >= 3:
-                recent_dates = dates[-3:]
-            else:
-                recent_dates = dates
-            df = tb[tb["date"].dt.date.isin(recent_dates)].copy().sort_values(
-                ["date", "band"]).reset_index(drop=True)
+            recent_dates = dates[-3:] if len(dates) >= 3 else dates
 
-            if df.empty:
+            df_plot = (
+                tb[tb["date"].dt.date.isin(recent_dates)]
+                .copy()
+                .sort_values(["date", "band"])
+                .reset_index(drop=True)
+            )
+            if df_plot.empty:
                 st.info("No timebands available.")
                 return
 
-            # Chart (candles + vol ratio vs 20d avg)
+            # ===== Top chart
             fig, ax1 = plt.subplots(figsize=(14, 5))
-            x_vals = np.arange(len(df))
-            y_ratio = pd.to_numeric(df["ratio_to_avg_20d"],
+            x_vals = np.arange(len(df_plot))
+            y_ratio = pd.to_numeric(df_plot["ratio_to_avg_20d"],
                                     errors="coerce").fillna(0).values
             ax1.bar(x_vals, y_ratio, alpha=0.6, label="Vol / 20d Avg")
             ax1.axhline(1.0, linestyle="--", linewidth=1, label="20d avg")
             ax1.set_ylabel("Volume Ratio")
             ax1.set_xticks(x_vals)
-            xticks = []
-            prev_date = None
-            for d, b in zip(df["date"], df["band"]):
-                current_date = d.date()
-                if current_date != prev_date:  # first band of a new day
-                    label = f"{current_date} {b.split('–')[0]}"  # date + start time
-                else:
-                    label = b.split("–")[0]  # just start time
-                xticks.append(label)
-                prev_date = current_date
 
+            xticks, prev_date = [], None
+            for d, b in zip(df_plot["date"], df_plot["band"]):
+                cd = d.date()
+                xticks.append(f"{cd} {b.split('–')[0]}" if cd != prev_date else
+                              b.split("–")[0])
+                prev_date = cd
             ax1.set_xticklabels(xticks, rotation=90, fontsize=7)
-
             ax1.grid(True, linestyle="--", alpha=0.6)
             ax1.legend(fontsize=8)
 
-            # Shade ETH (afterhours) bands in grey
-            if "session" in df.columns:
-                for i, sess in enumerate(df["session"]):
+            if "session" in df_plot.columns:
+                for i, sess in enumerate(df_plot["session"]):
                     if sess == "ETH":
                         ax1.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.2)
 
-            # Overlay candles
             ax2 = ax1.twinx()
             candle_width = 0.6
-            for i, r in df.iterrows():
+            for i, r in df_plot.iterrows():
                 o, h, l, c = r["open"], r["high"], r["low"], r["close"]
                 color = "g" if c >= o else "r"
                 ax2.vlines(i, l, h, color=color, linewidth=1)
-                ax2.add_patch(
-                    plt.Rectangle((i - candle_width / 2, min(o, c)),
-                                  candle_width, abs(c - o),
-                                  facecolor=color, edgecolor=color)
-                )
+                ax2.add_patch(plt.Rectangle((i - candle_width / 2, min(o, c)),
+                                            candle_width, abs(c - o),
+                                            facecolor=color, edgecolor=color))
             ax2.set_ylabel(f"{self.ticker} Price")
             st.pyplot(fig)
             plt.close(fig)
 
-            # Raw preview
-            df = (
+            # ===== Preview table (separate frame)
+            df_prev = (
                 tb[tb["date"].dt.date.isin(recent_dates)]
                 .copy()
-                .sort_values(["date", "band"],
-                             ascending=[False, False])  # most recent first
+                .sort_values(["date", "band"], ascending=[False, False])
                 .reset_index(drop=True)
             )
+            df_prev["date"] = pd.to_datetime(df_prev["date"]).dt.date
 
-            # Strip time from date for preview
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-
-            # --- Relative Flow (live for current bar, else = ratio_to_avg_20d) ---
             tz = ZoneInfo("America/New_York")
             now = datetime.now(tz)
-
-            df["est_vol_at_close"] = df[
-                "ratio_to_avg_20d"]  # default for closed bars
+            df_prev["est_vol_at_close"] = df_prev["ratio_to_avg_20d"]
 
             def _dt_on_day(d, hhmm):
                 hh, mm = map(int, str(hhmm).split(":"))
                 return datetime(d.year, d.month, d.day, hh, mm, tzinfo=tz)
 
-            current_idx = None
-            for i, r in df.iterrows():
+            for i, r in df_prev.iterrows():
                 start_dt = _dt_on_day(pd.to_datetime(r["date"]).to_pydatetime(),
                                       r["start"])
                 end_dt = _dt_on_day(pd.to_datetime(r["date"]).to_pydatetime(),
                                     r["end"])
                 if start_dt <= now < end_dt:
-                    current_idx = i
-                    elapsed_minutes = max(0.01,
-                                          (now - start_dt).total_seconds() / 60)
-                    live_val = compute_relative_flow(r["volume"],
-                                                     elapsed_minutes,
-                                                     r["avg_20d"])
-                    df.at[i, "est_vol_at_close"] = live_val
+                    elapsed = max(0.01, (now - start_dt).total_seconds() / 60)
+                    df_prev.at[i, "est_vol_at_close"] = compute_relative_flow(
+                        r["volume"], elapsed, r["avg_20d"])
                     break
 
-
-
-            # Raw preview
             st.subheader("Timebands")
-            st.dataframe(df, width="stretch")
+            st.dataframe(df_prev, width="stretch")
 
+            # ===== Futures stacked volume
+            try:
+                fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
+                if fut_syms:
+                    fut_frames = []
+                    for sym in fut_syms:
+                        path = f"/{self.ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+                        fdf = dbx_read_excel(path, sheet_name="Timebands")
+                        fdf["date"] = pd.to_datetime(fdf.get("date"),
+                                                     errors="coerce")
+                        fdf = fdf[fdf["date"].notna()].copy()
+                        fdf["date"] = fdf["date"].dt.date
+                        fdf["timestamp"] = pd.to_datetime(fdf.get("timestamp"),
+                                                          errors="coerce")
+                        fdf = fdf[fdf["date"].isin(recent_dates)].copy()
 
+                        vol_cols = [c for c in fdf.columns if c.endswith(
+                            "_volume") and c.lower() != "total_volume"]
+                        keep = ["date", "band", "timestamp"] + vol_cols
+                        fut_frames.append(fdf[keep])
 
+                    if fut_frames:
+                        from functools import reduce
+                        key = ["date", "band", "timestamp"]
+
+                        left = df_plot[["date", "band", "timestamp"]].copy()
+                        left["date"] = left["date"].dt.date
+
+                        fut_all = reduce(
+                            lambda a, b: pd.merge(a, b, on=key, how="outer"),
+                            fut_frames)
+                        fut_all = pd.merge(left, fut_all, on=key,
+                                           how="left").fillna(0.0)
+
+                        vol_cols_all = [c for c in fut_all.columns if
+                                        c.endswith(
+                                            "_volume") and c.lower() != "total_volume"]
+                        if vol_cols_all:
+                            fig2, ax = plt.subplots(figsize=(14, 3.5))
+                            x_vals2 = np.arange(len(fut_all))
+                            bottom = np.zeros(len(fut_all))
+                            for col in vol_cols_all:
+                                vals = pd.to_numeric(fut_all[col],
+                                                     errors="coerce").fillna(
+                                    0).values
+                                ax.bar(x_vals2, vals, bottom=bottom, label=col,
+                                       alpha=0.8)
+                                bottom += vals
+                            ax.set_ylabel("Futures Volume (stacked)")
+                            ax.set_xticks(x_vals2)
+                            ax.set_xticklabels(xticks, rotation=90, fontsize=7)
+                            ax.grid(True, linestyle="--", alpha=0.6)
+                            ax.legend(ncols=4, fontsize=7)
+                            if "session" in df_plot.columns:
+                                for i, sess in enumerate(df_plot["session"]):
+                                    if sess == "ETH":
+                                        ax.axvspan(i - 0.5, i + 0.5,
+                                                   color="grey", alpha=0.1)
+                            st.pyplot(fig2)
+                            plt.close(fig2)
+            except Exception as e:
+                st.warning(f"Futures volume plot skipped: {e}")
 
         except Exception as e:
-            st.info(f"Timebands not available: {e}")
+            st.error(f"Timebands render failed: {e}")
 
     def render_all(self):
         self.snapshot_path = self._get_latest_snapshot()
@@ -952,7 +890,7 @@ st.set_page_config(layout="wide")
 
 
 #=== Banner ===
-import os
+
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 BANNER_PATH = os.path.join(PROJECT_ROOT, "images", "qma_banner.png")
 
@@ -1138,6 +1076,3 @@ for i in range(REFRESH_INTERVAL, 0, -1):
     time.sleep(1)
 st.rerun()
 
-import os
-print(__file__)
-print(os.path.exists(os.path.join(os.path.dirname(__file__), "images", "qma_banner.png")))

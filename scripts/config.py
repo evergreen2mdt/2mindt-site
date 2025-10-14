@@ -74,7 +74,7 @@ def get_dropbox_path(ticker: str, category: str, filename: str | None = None) ->
         "options": f"{DROPBOX_ROOT}/{t}/{t}-options-data",
         "gaps": f"{DROPBOX_ROOT}/{t}/{t}-gaps-analysis",
         "timebands": f"{DROPBOX_ROOT}/{t}/{t}-timebands",
-
+        "futures": f"{DROPBOX_ROOT}/{t}/{t}-futures-volume",
     }
 
     if category not in folder_map:
