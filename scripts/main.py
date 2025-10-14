@@ -16,7 +16,7 @@ from volume_functions import run_timebands_30m
 
 # Loop cadence in seconds
 from config import TARGET_LOOP_SECONDS
-
+from futures_functions import run_all_etf_futures_volume
 
 
 def main():
@@ -59,6 +59,13 @@ def main():
             print("Timebands updated for all tickers")
         except Exception as e:
             print(f"Timebands update failed: {e}")
+
+        # Futures volumes
+        try:
+            run_all_etf_futures_volume()
+            print("Futures volumes updated for all ETFs")
+        except Exception as e:
+            print(f"Futures volume update failed: {e}")
 
         # === Sleep until next cadence ===
         loop_secs = time.monotonic() - start

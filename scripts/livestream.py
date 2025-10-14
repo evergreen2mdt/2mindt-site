@@ -804,6 +804,15 @@ class LiveStreamDashboard:
                         r["volume"], elapsed, r["avg_20d"])
                     break
 
+            keep_cols = [
+                "date", "timestamp", "generated_at", "granularity",
+                "session", "open", "high", "low", "close", "start", "end", "band", "barCount", "volume",
+                "avg_20d", "ratio_to_avg_20d", "est_vol_at_close"
+            ]
+            df_prev = df_prev[[c for c in keep_cols if c in df_prev.columns]]
+            df_prev = df_prev.sort_values(["date", "timestamp"],
+                                          ascending=[False, False])
+
             st.subheader("Timebands")
             st.dataframe(df_prev, width="stretch")
 
@@ -872,6 +881,39 @@ class LiveStreamDashboard:
 
         except Exception as e:
             st.error(f"Timebands render failed: {e}")
+
+        # ===== Futures Timebands Table (aggregate only, no OHLC or per-contract columns) =====
+        try:
+            fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
+            if fut_syms:
+                fut_frames = []
+                for sym in fut_syms:
+                    path = f"/{self.ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+                    fdf = dbx_read_excel(path, sheet_name="Timebands")
+                    fdf["date"] = pd.to_datetime(fdf.get("date"),
+                                                 errors="coerce")
+                    fdf = fdf[fdf["date"].notna()].copy()
+                    fdf["date"] = fdf["date"].dt.date
+
+                    # keep only final aggregate columns — no ohlc, no per-contract vol/barcount
+                    keep_cols = [
+                        "date", "timestamp", "generated_at", "granularity",
+                        "session", "band", "Total_barCount", "Total_volume",
+                        "avg_20d", "ratio_to_avg_20d"
+                    ]
+                    fdf = fdf[[c for c in keep_cols if c in fdf.columns]]
+                    fut_frames.append(fdf)
+
+                if fut_frames:
+                    fut_table = pd.concat(fut_frames, ignore_index=True)
+                    fut_table = fut_table.sort_values(["date", "timestamp"],
+                                                      ascending=[False, False])
+                    st.subheader("Futures Timebands")
+                    st.dataframe(fut_table, width="stretch")
+                else:
+                    st.info("No futures timeband data available.")
+        except Exception as e:
+            st.warning(f"Futures timebands table skipped: {e}")
 
     def render_all(self):
         self.snapshot_path = self._get_latest_snapshot()
