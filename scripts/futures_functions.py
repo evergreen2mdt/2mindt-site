@@ -1,6 +1,6 @@
 # === futures_functions.py ===
 from ib_insync import IB, Future
-
+import numpy as np
 import pandas as pd
 import os
 from openpyxl import load_workbook
@@ -87,31 +87,6 @@ def _fetch_30m_bars(contract, days=30):
     return df
 
 
-# def _fetch_30m_bars(contract, days=30):
-#     """Fetch 30-minute bars for given contract."""
-#     ib = IB()
-#     cid = abs(hash(("BARS", contract.localSymbol))) % 9000
-#     ib.connect("127.0.0.1", 7496, clientId=cid)
-#     bars = ib.reqHistoricalData(
-#         contract,
-#         endDateTime="",
-#         durationStr=f"{days} D",
-#         barSizeSetting="30 mins",
-#         whatToShow="TRADES",
-#         useRTH=False,
-#         formatDate=1,
-#     )
-#     ib.disconnect()
-#
-#     df = pd.DataFrame(bars)
-#     if df.empty:
-#         return df
-#     df["date"] = pd.to_datetime(df["date"], errors="coerce")
-#     try:
-#         df["date"] = df["date"].dt.tz_localize(None)
-#     except Exception:
-#         pass
-#     return df
 
 
 def _strip_tz(df):
