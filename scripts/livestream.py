@@ -26,6 +26,9 @@ from dropbox_utils import (
 )
 
 
+st.cache_data = lambda *a, **k: (lambda f: f)
+
+
 def load_futures_timebands(ticker: str):
     """Load and merge all mapped futures roots (e.g., SPY → ES,MES)."""
     roots = ETF_TO_FUTURES.get(ticker, [])

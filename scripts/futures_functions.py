@@ -58,7 +58,7 @@ def _detect_front_previous(contracts):
 
 
 def _fetch_30m_bars(contract, days=30):
-    """Fetch 30-minute bars for given contract."""
+    """Fetch 30-minute bars for given contract (timestamps in Eastern local time)."""
     ib = IB()
     cid = abs(hash(("BARS", contract.localSymbol))) % 9000
     ib.connect("127.0.0.1", 7496, clientId=cid)
@@ -77,14 +77,12 @@ def _fetch_30m_bars(contract, days=30):
     if df.empty:
         return df
 
-    # Keep full datetime, strip tz only
-    df["date"] = pd.to_datetime(df["date"], errors="coerce")
-    try:
-        df["date"] = df["date"].dt.tz_localize(None)
-    except Exception:
-        pass
+    # Convert UTC → Eastern, then drop tz info
+    df["date"] = pd.to_datetime(df["date"], utc=True, errors="coerce")
+    df["date"] = df["date"].dt.tz_convert("America/New_York").dt.tz_localize(None)
 
     return df
+
 
 
 
@@ -302,6 +300,15 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
     # --- Write Excel with all sheets ---
     ts = datetime.now().strftime("%Y-%m-%d_%H%M")
     fname = f"{symbol.lower()}_timeband_volume.xlsx"
+    abs_path = os.path.abspath(fname)
+
+    # always remove any old local file before writing
+    if os.path.exists(abs_path):
+        try:
+            os.remove(abs_path)
+        except Exception as e:
+            print(f"[warn] could not remove old local file: {e}")
+
     print(f"[save] Writing Excel → {fname}")
 
     with pd.ExcelWriter(fname, engine="openpyxl", mode="w") as w:
@@ -323,6 +330,7 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
             sub.sort_values("date", inplace=True)
             sub["date"] = pd.to_datetime(sub["date"], errors="coerce").dt.date
             sub.to_excel(w, sheet_name=name, index=False)
+
 
     # --- Format workbook ---
     format_excel_workbook(fname)
