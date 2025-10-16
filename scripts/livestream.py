@@ -154,133 +154,6 @@ def get_paths(ticker: str):
         "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
         "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
     }
-
-def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
-    """
-    Show est_vol_at_close from ES and MES futures with ETF-style axis:
-    - All 30m bands labeled
-    - Date shown only once per day
-    - ETH shaded grey
-    - 20d avg baseline at 1.0
-    """
-    import matplotlib.pyplot as plt
-    import numpy as np
-    import pandas as pd
-    import streamlit as st
-
-    if df.empty:
-        st.info("No futures data to display.")
-        return
-
-    fut_syms = ETF_TO_FUTURES.get(ticker, [])
-    if not fut_syms:
-        st.info("No futures mappings found.")
-        return
-
-    # --- Load each futures file ---
-    rows = []
-    for sym in fut_syms:
-        path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
-        try:
-            tmp = dbx_read_excel(path, sheet_name="Timebands")
-            if tmp is None or tmp.empty:
-                continue
-
-            tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
-            tmp = tmp[tmp["date"].notna()].copy()
-            tmp["Root"] = sym.upper()
-            rows.append(tmp[["date", "band", "session", "est_vol_at_close", "Root"]])
-        except Exception as e:
-            st.warning(f"{sym}: {e}")
-
-    if not rows:
-        st.info("No futures timeband data found.")
-        return
-
-    df = pd.concat(rows, ignore_index=True)
-
-    # --- Combine date + band start for ordering ---
-    df["band_start"] = df["band"].str.split("–").str[0]
-    df["band_dt"] = pd.to_datetime(
-        df["date"].astype(str) + " " + df["band_start"], errors="coerce"
-    )
-    df = df.sort_values("band_dt")
-
-    # --- Match ETF chart: last 3 trading days ---
-    all_dates = sorted(df["date"].unique())
-    keep_dates = all_dates[-3:] if len(all_dates) >= 3 else all_dates
-    df = df[df["date"].isin(keep_dates)]
-
-    # --- Pivot each futures root into its own column ---
-    pivot = (
-        df.pivot_table(
-            index=["date", "band", "band_dt", "session"],
-            columns="Root",
-            values="est_vol_at_close",
-            aggfunc="mean"
-        )
-        .reset_index()
-        .sort_values("band_dt")
-    )
-    pivot.columns.name = None
-    pivot = pivot.reset_index(drop=True)
-
-    # === Build axis labels identical to ETF Timebands ===
-    xticks, prev_date = [], None
-    for d, b in zip(pivot["date"], pivot["band"]):
-        # Ensure clean types
-        d = pd.to_datetime(d, errors="coerce")
-        if pd.isna(d):
-            xticks.append(b.split("–")[0])
-            continue
-        cd = d.date()
-        if cd != prev_date:
-            xticks.append(f"{cd} {b.split('–')[0]}")
-            prev_date = cd
-        else:
-            xticks.append(b.split("–")[0])
-
-    x_vals = np.arange(len(xticks))
-
-    # --- Plot ---
-    fig, ax = plt.subplots(figsize=(14, 5))
-    width = 0.4
-    roots = [c for c in pivot.columns if c not in ["date", "band", "band_dt", "session"]]
-    colors = ["#1f77b4", "#66b3ff"]
-
-    for i, root in enumerate(roots):
-        y = pivot[root].fillna(0).values
-        offset = (i - 0.5) * width
-        ax.bar(
-            x_vals + offset, y, width=width,
-            label=root, color=colors[i % len(colors)], alpha=0.9
-        )
-
-    # --- Baseline (1.0 = 20-day avg) ---
-    ax.axhline(1.0, linestyle="--", color="gray", linewidth=1, label="20d avg (×1.0)")
-
-    # --- Shade ETH bands ---
-    for i, sess in enumerate(pivot["session"]):
-        if sess == "ETH":
-            ax.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.15)
-
-    # --- Axis formatting identical to ETF chart ---
-    ax.set_xticks(x_vals)
-    ax.set_xticklabels(xticks, rotation=90, fontsize=7)
-    ax.set_ylabel("Est. Volume Ratio (×)")
-    ax.set_title(f"{ticker} Futures Estimated Volume at Close (× vs 20-Day Avg)")
-    ax.grid(True, axis="y", linestyle="--", alpha=0.6)
-    ax.legend(fontsize=8)
-    fig.subplots_adjust(bottom=0.25)
-    plt.tight_layout()
-
-    st.pyplot(fig)
-    plt.close(fig)
-
-
-
-
-
 #
 # def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #     """
@@ -312,6 +185,7 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #             tmp = dbx_read_excel(path, sheet_name="Timebands")
 #             if tmp is None or tmp.empty:
 #                 continue
+#
 #             tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
 #             tmp = tmp[tmp["date"].notna()].copy()
 #             tmp["Root"] = sym.upper()
@@ -325,7 +199,7 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #
 #     df = pd.concat(rows, ignore_index=True)
 #
-#     # --- Combine date + band time for ordering ---
+#     # --- Combine date + band start for ordering ---
 #     df["band_start"] = df["band"].str.split("–").str[0]
 #     df["band_dt"] = pd.to_datetime(
 #         df["date"].astype(str) + " " + df["band_start"], errors="coerce"
@@ -337,7 +211,7 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #     keep_dates = all_dates[-3:] if len(all_dates) >= 3 else all_dates
 #     df = df[df["date"].isin(keep_dates)]
 #
-#     # --- Align by band across all roots ---
+#     # --- Pivot each futures root into its own column ---
 #     pivot = (
 #         df.pivot_table(
 #             index=["date", "band", "band_dt", "session"],
@@ -349,22 +223,24 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #         .sort_values("band_dt")
 #     )
 #     pivot.columns.name = None
+#     pivot = pivot.reset_index(drop=True)
 #
-#     # --- Build x-axis labels (ETF-style: one date per day) ---
-#     # --- Build x-axis labels using pivot (aligned to plotted bars) ---
-#     x_labels = []
-#     prev_date = None
-#     for _, r in pivot.iterrows():
-#         time_label = pd.to_datetime(r["band"].split("–")[0], format="%H:%M",
-#                                     errors="coerce").strftime("%H:%M")
-#         if r["date"] != prev_date:
-#             label = f"{r['date'].strftime('%Y-%m-%d')}\n{time_label}"
-#             prev_date = r["date"]
+#     # === Build axis labels identical to ETF Timebands ===
+#     xticks, prev_date = [], None
+#     for d, b in zip(pivot["date"], pivot["band"]):
+#         # Ensure clean types
+#         d = pd.to_datetime(d, errors="coerce")
+#         if pd.isna(d):
+#             xticks.append(b.split("–")[0])
+#             continue
+#         cd = d.date()
+#         if cd != prev_date:
+#             xticks.append(f"{cd} {b.split('–')[0]}")
+#             prev_date = cd
 #         else:
-#             label = time_label
-#         x_labels.append(label)
+#             xticks.append(b.split("–")[0])
 #
-#     x_vals = np.arange(len(x_labels))
+#     x_vals = np.arange(len(xticks))
 #
 #     # --- Plot ---
 #     fig, ax = plt.subplots(figsize=(14, 5))
@@ -375,8 +251,10 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #     for i, root in enumerate(roots):
 #         y = pivot[root].fillna(0).values
 #         offset = (i - 0.5) * width
-#         ax.bar(x_vals + offset, y, width=width,
-#                label=root, color=colors[i % len(colors)], alpha=0.9)
+#         ax.bar(
+#             x_vals + offset, y, width=width,
+#             label=root, color=colors[i % len(colors)], alpha=0.9
+#         )
 #
 #     # --- Baseline (1.0 = 20-day avg) ---
 #     ax.axhline(1.0, linestyle="--", color="gray", linewidth=1, label="20d avg (×1.0)")
@@ -386,22 +264,148 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 #         if sess == "ETH":
 #             ax.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.15)
 #
+#     # --- Axis formatting identical to ETF chart ---
 #     ax.set_xticks(x_vals)
-#     ax.set_xticklabels(x_labels, rotation=90, fontsize=7)
+#     ax.set_xticklabels(xticks, rotation=90, fontsize=7)
 #     ax.set_ylabel("Est. Volume Ratio (×)")
 #     ax.set_title(f"{ticker} Futures Estimated Volume at Close (× vs 20-Day Avg)")
 #     ax.grid(True, axis="y", linestyle="--", alpha=0.6)
 #     ax.legend(fontsize=8)
+#     fig.subplots_adjust(bottom=0.25)
 #     plt.tight_layout()
 #
 #     st.pyplot(fig)
 #     plt.close(fig)
-#
-#
+def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
+    """
+    Show est_vol_at_close from ES and MES futures with ETF-style axis.
+    Uses fixed filenames (no timestamps), identical behavior to ETF timebands.
+    Includes debug prints for folder, file, and row counts.
+    """
+    import matplotlib.pyplot as plt
+    import numpy as np
+    import pandas as pd
+    import streamlit as st
 
+    if df.empty:
+        st.info("No futures data to display.")
+        return
 
+    fut_syms = ETF_TO_FUTURES.get(ticker, [])
+    if not fut_syms:
+        st.info("No futures mappings found.")
+        return
 
+    rows = []
+    for sym in fut_syms:
+        try:
+            # --- fixed file path identical to ETF timebands ---
+            path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+            print(f"[DEBUG] Attempting to load futures file: {path}")
 
+            tmp = dbx_read_excel(path, sheet_name="Timebands")
+            if tmp is None or tmp.empty:
+                print(f"[DEBUG] Empty or missing file for {sym}: {path}")
+                continue
+
+            tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
+            tmp = tmp[tmp["date"].notna()].copy()
+            tmp["Root"] = sym.upper()
+            rows.append(tmp[["date", "band", "session", "est_vol_at_close", "Root"]])
+            print(f"[DEBUG] Loaded {len(tmp)} rows from {sym}")
+
+        except Exception as e:
+            print(f"[ERROR] {sym}: {e}")
+            st.warning(f"{sym}: {e}")
+
+    if not rows:
+        print("[DEBUG] No valid futures data loaded.")
+        st.info("No futures timeband data found.")
+        return
+
+    print(f"[DEBUG] Concatenating {len(rows)} futures DataFrames...")
+    df = pd.concat(rows, ignore_index=True)
+
+    # --- Combine date + band start for ordering ---
+    df["band_start"] = df["band"].str.split("–").str[0]
+    df["band_dt"] = pd.to_datetime(
+        df["date"].astype(str) + " " + df["band_start"], errors="coerce"
+    )
+    df = df.sort_values("band_dt")
+
+    # --- Match ETF chart: last 3 trading days ---
+    all_dates = sorted(df["date"].unique())
+    keep_dates = all_dates[-3:] if len(all_dates) >= 3 else all_dates
+    df = df[df["date"].isin(keep_dates)]
+    print(f"[DEBUG] Keeping {len(keep_dates)} most recent trading days.")
+
+    # --- Pivot each futures root into its own column ---
+    pivot = (
+        df.pivot_table(
+            index=["date", "band", "band_dt", "session"],
+            columns="Root",
+            values="est_vol_at_close",
+            aggfunc="mean"
+        )
+        .reset_index()
+        .sort_values("band_dt")
+    )
+    pivot.columns.name = None
+    pivot = pivot.reset_index(drop=True)
+    print(f"[DEBUG] Pivot complete. Columns: {list(pivot.columns)}")
+
+    # === Build axis labels identical to ETF Timebands ===
+    xticks, prev_date = [], None
+    for d, b in zip(pivot["date"], pivot["band"]):
+        d = pd.to_datetime(d, errors="coerce")
+        if pd.isna(d):
+            xticks.append(b.split("–")[0])
+            continue
+        cd = d.date()
+        if cd != prev_date:
+            xticks.append(f"{cd} {b.split('–')[0]}")
+            prev_date = cd
+        else:
+            xticks.append(b.split("–")[0])
+
+    x_vals = np.arange(len(xticks))
+
+    # --- Plot ---
+    fig, ax = plt.subplots(figsize=(14, 5))
+    width = 0.4
+    roots = [c for c in pivot.columns if c not in ["date", "band", "band_dt", "session"]]
+    colors = ["#1f77b4", "#66b3ff"]
+    print(f"[DEBUG] Plotting roots: {roots}")
+
+    for i, root in enumerate(roots):
+        y = pivot[root].fillna(0).values
+        offset = (i - 0.5) * width
+        ax.bar(
+            x_vals + offset, y, width=width,
+            label=root, color=colors[i % len(colors)], alpha=0.9
+        )
+
+    # --- Baseline (1.0 = 20-day avg) ---
+    ax.axhline(1.0, linestyle="--", color="gray", linewidth=1, label="20d avg (×1.0)")
+
+    # --- Shade ETH bands ---
+    for i, sess in enumerate(pivot["session"]):
+        if sess == "ETH":
+            ax.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.15)
+
+    ax.set_xticks(x_vals)
+    ax.set_xticklabels(xticks, rotation=90, fontsize=7)
+    ax.set_ylabel("Est. Volume Ratio (×)")
+    ax.set_title(f"{ticker} Futures Estimated Volume at Close (× vs 20-Day Avg)")
+    ax.grid(True, axis="y", linestyle="--", alpha=0.6)
+    ax.legend(fontsize=8)
+    fig.subplots_adjust(bottom=0.25)
+    plt.tight_layout()
+
+    print(f"[DEBUG] Rendering futures volume chart for {ticker}")
+    st.pyplot(fig)
+    plt.close(fig)
+    print(f"[DEBUG] Done rendering {ticker}")
 
 
 

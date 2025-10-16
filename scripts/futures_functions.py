@@ -14,7 +14,7 @@ from dropbox_utils import upload_file
 from config import get_dropbox_path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
+from dropbox_utils import get_dropbox_client
 # ---------- Helpers ----------
 
 def _contracts_with_expiry(symbol: str):
@@ -37,6 +37,19 @@ def _contracts_with_expiry(symbol: str):
     out.sort(key=lambda x: x[0])
     print(f"[contracts] {len(out)} total for {symbol}")
     return out
+
+def _wipe_folder(path: str):
+    dbx = get_dropbox_client()
+    try:
+        res = dbx.files_list_folder(path)
+        for e in res.entries:
+            dbx.files_delete_v2(f"{path}/{e.name}")
+        while res.has_more:
+            res = dbx.files_list_folder_continue(res.cursor)
+            for e in res.entries:
+                dbx.files_delete_v2(f"{path}/{e.name}")
+    except Exception:
+        pass
 
 
 def _detect_front_previous(contracts):
@@ -300,6 +313,7 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
     # --- Write Excel with all sheets ---
     ts = datetime.now().strftime("%Y-%m-%d_%H%M")
     fname = f"{symbol.lower()}_timeband_volume.xlsx"
+
     abs_path = os.path.abspath(fname)
 
     # always remove any old local file before writing
@@ -331,10 +345,18 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
             sub["date"] = pd.to_datetime(sub["date"], errors="coerce").dt.date
             sub.to_excel(w, sheet_name=name, index=False)
 
-
     # --- Format workbook ---
     format_excel_workbook(fname)
     abs_path = os.path.abspath(fname)
+
+    # --- Upload to Dropbox (wipe and write fresh) ---
+    parent = (parent_ticker or symbol).lower()
+    child = f"{symbol.lower()}-timebands-volume"
+    folder = f"/{parent}/{child}"
+    _wipe_folder(folder)  # clear old ES/MES file versions
+    dropbox_path = f"{folder}/{os.path.basename(fname)}"
+    upload_file(abs_path, dropbox_path)
+    print(f"[Dropbox] Uploaded {symbol} → {dropbox_path}")
 
     # --- Upload to Dropbox ---
     parent = (parent_ticker or symbol).lower()  # "spy" / "qqq" ...
