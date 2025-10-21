@@ -526,6 +526,7 @@ def run_gap_analysis(start_date="2003-01-01"):
     mam_stats_days = generate_mam_days_stats_by_gap_type(output_path)
 
     # === Save everything ===
+
     save_multiple_sheets_with_formatting(
         {
             "All Data": df,

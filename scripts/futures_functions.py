@@ -246,10 +246,39 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
     pivot["session"] = pivot["timestamp"].dt.time.between(
         pd.to_datetime("09:30").time(), pd.to_datetime("16:00").time()
     ).map({True: "RTH", False: "ETH"})
-    pivot["avg_20d"] = pivot.groupby("band")["volume"].transform(
-        lambda x: x.rolling(20, min_periods=1).mean()
-    )
+
+    # --- 20-day rolling stats per time band ---
+    grouped = pivot.groupby("band")["volume"]
+    pivot["avg_20d"] = grouped.transform(
+        lambda x: x.rolling(20, min_periods=1).mean())
+    pivot["stdev_20d"] = grouped.transform(
+        lambda x: x.rolling(20, min_periods=1).std())
     pivot["ratio_to_avg_20d"] = pivot["volume"] / pivot["avg_20d"]
+
+    # --- Z-score (number of stdevs from 20-day mean) ---
+    pivot["zscore_20d"] = (pivot["volume"] - pivot["avg_20d"]) / pivot[
+        "stdev_20d"]
+
+    # Flag direction for later coloring
+    def _sigma_flag(z):
+        if pd.isna(z):
+            return ""
+        if z >= 3:
+            return "≥3σ above"
+        elif z >= 2:
+            return "≥2σ above"
+        elif z >= 1:
+            return "≥1σ above"
+        elif z <= -3:
+            return "≥3σ below"
+        elif z <= -2:
+            return "≥2σ below"
+        elif z <= -1:
+            return "≥1σ below"
+        return ""
+
+    pivot["sigma_flag"] = pivot["zscore_20d"].apply(_sigma_flag)
+
 
     tz = ZoneInfo("America/New_York")
     now = datetime.now(tz)
@@ -299,7 +328,15 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
             + ordered_vol_cols
             + ["volume"]  # rename later as Total_volume
             + ordered_bar_cols
-            + ["barCount", "avg_20d", "ratio_to_avg_20d", "est_vol_at_close"]
+            + [
+                "barCount",
+                "avg_20d",
+                "stdev_20d",
+                "zscore_20d",
+                "sigma_flag",
+                "ratio_to_avg_20d",
+                "est_vol_at_close",
+            ]
     )
 
     pivot = pivot[[c for c in ordered_cols if c in pivot.columns]]

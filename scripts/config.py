@@ -38,28 +38,6 @@ ETF_TO_FUTURES = {
 
 DEFAULT_START_DATE = "2003-01-01"
 
-# # === Dropbox root ===
-# DROPBOX_ROOT = r"C:\Users\colby\Dropbox\2mindt"
-#
-#
-# # === Folder resolver ===
-# def get_folder(ticker: str, category: str) -> str:
-#     """
-#     Return Dropbox folder path for a given ticker + category.
-#     Categories: 'gaps', 'options', 'timebands'
-#     """
-#     category_map = {
-#         "gaps": f"{ticker.lower()}-gaps-analysis",
-#         "options": f"{ticker.lower()}-options-data",
-#         "timebands": f"{ticker.lower()}-timebands",
-#     }
-#
-#     folder = category_map.get(category.lower())
-#     if not folder:
-#         raise ValueError(f"Unknown category: {category}")
-#
-#     return os.path.join(DROPBOX_ROOT, ticker.lower(), folder)
-
 
 
 # === Dropbox Path Helpers ===
@@ -75,6 +53,7 @@ def get_dropbox_path(ticker: str, category: str, filename: str | None = None) ->
         "gaps": f"{DROPBOX_ROOT}/{t}/{t}-gaps-analysis",
         "timebands": f"{DROPBOX_ROOT}/{t}/{t}-timebands",
         "futures": f"{DROPBOX_ROOT}/{t}/{t}-futures-volume",
+        "red-green": f"{DROPBOX_ROOT}/{t}/{t}-red-green",  # <-- added
     }
 
     if category not in folder_map:
@@ -82,6 +61,7 @@ def get_dropbox_path(ticker: str, category: str, filename: str | None = None) ->
 
     base = folder_map[category]
     return f"{base}/{filename}" if filename else base
+
 
 
 

@@ -162,10 +162,36 @@ def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True):
         print(df.head())
 
         # --- Rolling 20-day averages per band ---
+        # --- Rolling 20-day averages and Z-score metrics per band ---
         df["avg_20d"] = (
             df.groupby("band", group_keys=False)["volume"]
             .transform(lambda x: x.rolling(20, min_periods=1).mean())
         )
+        df["stdev_20d"] = (
+            df.groupby("band", group_keys=False)["volume"]
+            .transform(lambda x: x.rolling(20, min_periods=1).std())
+        )
+        df["zscore_20d"] = (df["volume"] - df["avg_20d"]) / df["stdev_20d"]
+
+        def _sigma_flag(z):
+            if pd.isna(z):
+                return ""
+            if z >= 3:
+                return "≥3σ above"
+            elif z >= 2:
+                return "≥2σ above"
+            elif z >= 1:
+                return "≥1σ above"
+            elif z <= -3:
+                return "≥3σ below"
+            elif z <= -2:
+                return "≥2σ below"
+            elif z <= -1:
+                return "≥1σ below"
+            return ""
+
+        df["sigma_flag"] = df["zscore_20d"].apply(_sigma_flag)
+
         df["ratio_to_avg_20d"] = df["volume"] / df["avg_20d"]
 
         # --- Temporary local save ---

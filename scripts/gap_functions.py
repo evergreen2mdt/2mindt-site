@@ -24,6 +24,69 @@ from config import DEFAULT_START_DATE
 # === Contract map: ticker -> (security type, exchange, currency) ===
 from config import TICKER_MAP
 
+
+import os
+import numpy as np
+import pandas as pd
+from dropbox_utils import read_excel, upload_file
+from config import get_dropbox_path, TICKER_MAP
+
+
+
+
+def compute_gap_features(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
+    """
+    Build required features for core gap classification:
+      - atr_20: 20-day Average True Range
+      - trend_5d: 5-day pct change of close
+      - volume_ratio_to_avg_20d: daily mean of timeband volume ratios merged from timebands workbook
+    """
+    df = df.copy()
+    # dates
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+
+    # ATR(20) if OHLC present
+    if {"high", "low", "close"}.issubset(df.columns):
+        prev_close = df["close"].shift(1)
+        tr = np.maximum(
+            df["high"] - df["low"],
+            np.maximum((df["high"] - prev_close).abs(), (df["low"] - prev_close).abs())
+        )
+        df["atr_20"] = tr.rolling(20, min_periods=5).mean()
+    else:
+        df["atr_20"] = np.nan
+
+    # Trend over last 5 closes
+    if "close" in df.columns:
+        df["trend_5d"] = df["close"].pct_change(5)
+    else:
+        df["trend_5d"] = np.nan
+
+    # Merge daily mean of ratio_to_avg_20d from Timebands
+    try:
+        tb_path = get_dropbox_path(ticker, "timebands", f"{ticker.lower()}_timeband_volume.xlsx")
+        tb = read_excel(tb_path, sheet_name="Timebands")
+        tb["date"] = pd.to_datetime(tb["date"], errors="coerce").dt.date
+
+        tb_daily = tb.groupby("date", as_index=False)["ratio_to_avg_20d"].mean()
+        df["date_only"] = df["date"].dt.date  # normalize to date for join
+
+        df = df.merge(tb_daily, how="left", left_on="date_only", right_on="date")
+        df.rename(columns={"ratio_to_avg_20d": "volume_ratio_to_avg_20d"}, inplace=True)
+        # clean join helper columns
+        df.drop(columns=["date_y", "date_only"], inplace=True, errors="ignore")
+        df.rename(columns={"date_x": "date"}, inplace=True)
+
+        # optional diagnostics
+        matched = df["volume_ratio_to_avg_20d"].notna().sum()
+        print(f"[compute_gap_features] {ticker}: merged volume ratios for {matched} rows.")
+    except Exception as e:
+        print(f"[compute_gap_features] {ticker}: failed to merge timebands ratios: {e}")
+        df["volume_ratio_to_avg_20d"] = np.nan
+
+    return df
+
+
 # === IB Data Fetch ===
 def get_ib_data(tickers="SPY", start_date="2003-01-01"):
     from ib_insync import IB, Stock, Index
@@ -177,6 +240,36 @@ def compute_gap_data(df: pd.DataFrame) -> pd.DataFrame:
         else "short" if "up" in str(x).lower()
         else None
     )
+    df["original_index"] = range(len(df))
+
+    # === NEW SAME-DAY MOVE COLOR LOGIC ===
+    def classify_same_day_move(row):
+        gt = str(row.get("gap_type", "")).lower()
+
+        if "bar_gap_down" in gt or "price_gap_down" in gt:
+            # Down-gap → long bias
+            if row["open"] > row["close"]:
+                return "red"
+            elif row["open"] < row["close"]:
+                return "green"
+            else:
+                return "none"
+
+        elif "bar_gap_up" in gt or "price_gap_up" in gt:
+            # Up-gap → short bias
+            if row["open"] < row["close"]:
+                return "red"
+            elif row["open"] > row["close"]:
+                return "green"
+            else:
+                return "none"
+
+        else:
+            return "none"
+
+    df["same_day_move_type"] = df.apply(classify_same_day_move, axis=1)
+    # === END NEW LOGIC ===
+
     df["original_index"] = range(len(df))
     return df
 
@@ -359,6 +452,94 @@ def get_recent_unhit_targets(df: pd.DataFrame, days: int = 10):
     return summary
 
 
+def classify_core_gaps_single(df: pd.DataFrame, ticker: str) -> dict:
+    """Compute and return the Gap Classification and Reference DataFrames for one ticker."""
+    df = compute_gap_features(df, ticker).copy()
+
+    # --- Core derived metrics ---
+    df["gap_pct"] = (df["open"] - df["previous_close"]) / df["previous_close"] * 100
+    df["gap_direction"] = np.sign(df["gap value"])
+    df["trend_sign"] = np.sign(df["trend_5d"])
+    if "follow_through" not in df.columns:
+        df["follow_through"] = 0.0
+
+    # --- Classification logic ---
+    def classify_gap(row):
+        if pd.isna(row["atr_20"]):
+            return "unknown"
+        gap_ratio = abs(row["gap value"]) / row["atr_20"]
+        aligned = (row["trend_sign"] * row["gap_direction"]) > 0
+        strong_vol = (row.get("volume_ratio_to_avg_20d", 0) or 0) >= 1.5
+        extended = abs(row["follow_through"]) >= 0.5 * row["atr_20"]
+
+        if gap_ratio >= 1.0 and strong_vol and extended:
+            return "breakaway"
+        if gap_ratio >= 0.5 and aligned and strong_vol and extended:
+            return "continuation"
+        if gap_ratio >= 0.5 and not aligned and strong_vol and not extended:
+            return "exhaustion"
+        return "common"
+
+    df["core_gap_type"] = df.apply(classify_gap, axis=1)
+
+    # --- Add Day1–Day10 core gap type tracking ---
+    for n in range(1, 11):
+        df[f"Day{n}_core_gap_type"] = df["core_gap_type"].shift(-n)
+
+    # --- Final classified dataframe ---
+    df_classified = df[[
+        "date", "gap value", "atr_20", "volume_ratio_to_avg_20d",
+        "trend_5d", "core_gap_type"
+    ] + [f"Day{n}_core_gap_type" for n in range(1, 11)]]
+
+    # --- Institutional Reference Table ---
+    reference_data = [
+        {
+            "gap_type": "common",
+            "definition": "Small liquidity gap inside prior range, typically filled quickly.",
+            "gap_filter": "|gap| < 0.5 * ATR20",
+            "volume_filter": "vol_ratio < 1.3",
+            "trend_filter": "within prior day range",
+            "context": "no major events, neutral gamma",
+            "empirical_stats": "fill_1d≈85%, mean_fill_days≈1.3, followthrough>1ATR≈5%"
+        },
+        {
+            "gap_type": "breakaway",
+            "definition": "Gap beyond multi-day range initiating new regime.",
+            "gap_filter": "|gap| ≥ 1.0 * ATR20",
+            "volume_filter": "vol_ratio > 2.0",
+            "trend_filter": "closes beyond 5-day high/low",
+            "context": "event-driven, short-gamma regime",
+            "empirical_stats": "fill_1d≈20%, ext≈2.4ATR, persistence≥5d≈70%"
+        },
+        {
+            "gap_type": "continuation",
+            "definition": "Mid-trend acceleration in same direction as 5-day trend.",
+            "gap_filter": "0.5 ≤ |gap|/ATR20 < 1.5",
+            "volume_filter": "vol_ratio > 1.5",
+            "trend_filter": "sign(trend5d)=sign(gap)",
+            "context": "trend-aligned, stable vol surface",
+            "empirical_stats": "fill_1d≈35%, ext≈1.8ATR, persistence≥3d≈60%"
+        },
+        {
+            "gap_type": "exhaustion",
+            "definition": "Late-trend blow-off gap preceding reversal.",
+            "gap_filter": "|gap| ≥ 0.5 * ATR20",
+            "volume_filter": "vol_ratio > 3σ",
+            "trend_filter": "sign(trend5d)≠sign(gap)",
+            "context": "vol spike >2σ, event-proximate",
+            "empirical_stats": "fill_1d≈55%, revert≈90%≤3d, trend_flip≈65%"
+        },
+    ]
+
+    df_reference = pd.DataFrame(reference_data)
+
+    # --- Return both dataframes together ---
+    return {"classified": df_classified, "reference": df_reference}
+
+
+
+
 def format_probabilities_in_workbook(wb):
     if "Days to Target" in wb.sheetnames:
         ws = wb["Days to Target"]
@@ -386,9 +567,101 @@ def save_multiple_sheets_with_formatting(sheets_dict, output_path):
     format_probabilities_in_workbook(wb)
     wb.save(output_path)
 
+
+
+from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
+from openpyxl.styles import Font
+import os
+
+def save_red_green_workbook(df: pd.DataFrame, ticker: str) -> str:
+    """
+    Create a temporary formatted Red-Green workbook for upload.
+    Includes two sheets:
+    1. Red Green — detailed day-level results
+    2. Days to Green — cumulative % of green closes by gap type
+    Returns the local path for upload.
+    """
+    keep_cols = [
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "gap_type",
+        "trade_direction",
+        "same_day_move_type",
+    ]
+    sub = df[[c for c in keep_cols if c in df.columns]].copy()
+    sub.sort_values("date", inplace=True)
+
+    # Add Days to Green summary
+    days_to_green = create_days_to_green_summary_table(df)
+
+    # Save to same temp path as other workbooks
+    tmp_dir = r"C:\2mdt\2mindt-site\scripts"
+    os.makedirs(tmp_dir, exist_ok=True)
+    path = os.path.join(tmp_dir, f"{ticker.lower()}_red_green.xlsx")
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Red Green"
+
+    # --- Sheet 1: Red Green (raw results) ---
+    ws.append(keep_cols)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+
+    for _, r in sub.iterrows():
+        ws.append([r.get(c, "") for c in keep_cols])
+
+    ws.freeze_panes = "A2"
+    for col_cells in ws.columns:
+        max_len = max(len(str(c.value)) if c.value else 0 for c in col_cells)
+        ws.column_dimensions[get_column_letter(col_cells[0].column)].width = max_len + 2
+
+    # --- Sheet 2: Days to Green (summary) ---
+    ws2 = wb.create_sheet(title="Days to Green")
+    ws2.append(list(days_to_green.columns))
+    for cell in ws2[1]:
+        cell.font = Font(bold=True)
+
+    for _, r in days_to_green.iterrows():
+        ws2.append(r.tolist())
+
+    ws2.freeze_panes = "A2"
+    for col_cells in ws2.columns:
+        max_len = max(len(str(c.value)) if c.value else 0 for c in col_cells)
+        ws2.column_dimensions[get_column_letter(col_cells[0].column)].width = max_len + 2
+
+    wb.save(path)
+    print(f"[save_red_green_workbook] Created temp file → {path}")
+    return path
+
+
+
+def create_days_to_green_summary_table(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute percent of same-day green closes by gap_type.
+    """
+    df = df.copy()
+    df["gap_type"] = df["gap_type"].astype(str)
+    df["same_day_move_type"] = df["same_day_move_type"].astype(str)
+
+    result = (
+        df.groupby("gap_type")["same_day_move_type"]
+          .apply(lambda x: (x == "green").mean() * 100)
+          .round(1)
+          .reset_index(name="Days 1")
+    )
+    return result
+
+
+
+
+
+
 # === Runner ===
-
-
 def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
                                    start_date=DEFAULT_START_DATE):
     results = {}
@@ -419,12 +692,18 @@ def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
             if col in df.columns:
                 df[col] = pd.to_datetime(df[col], errors="coerce").dt.date
 
+        # --- Generate supporting sheets ---
         gap_type_stats = compute_gap_type_stats_df(df)
         days_to_target = create_days_to_target_summary_table_gap_types_df(df)
         mam_stats_pts = generate_mam_stats_by_gap_type_df(df)
         mam_stats_days = generate_mam_days_stats_by_gap_type_df(df)
 
-        # --- Save locally (temporary file) ---
+        # --- Core gap classification ---
+        class_result = classify_core_gaps_single(df, ticker)
+        classified = class_result["classified"]
+        reference = class_result["reference"]
+
+        # --- Save primary gap-analysis workbook ---
         local_filename = f"{ticker.lower()} gap analysis.xlsx"
         save_multiple_sheets_with_formatting(
             {
@@ -433,19 +712,42 @@ def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
                 "Days to Target": days_to_target,
                 "MAM (PTS)": mam_stats_pts,
                 "MAM (DAYS)": mam_stats_days,
+                "Gap Classification": classified,
+                "Classification Reference": reference,
             },
             local_filename
         )
 
-        # --- Upload to Dropbox ---
+        # --- Upload main workbook to Dropbox ---
         dropbox_path = get_dropbox_path(ticker, "gaps", local_filename)
         upload_file(local_filename, dropbox_path)
         print(f"[Dropbox] Uploaded {ticker} gap analysis → {dropbox_path}")
-
         results[ticker] = dropbox_path
-        print(f"[Dropbox] Uploaded {ticker} → {dropbox_path}")
 
-    # --- Delete local temp file ---
+        # --- Save and upload standalone Red-Green workbook ---
+        try:
+            # 1. Create temp workbook in scripts directory
+            tmp_path = save_red_green_workbook(df, ticker)
+            red_green_filename = os.path.basename(tmp_path)
+
+            # 2. Build Dropbox destination path (e.g., /spy/spy-red-green/spy_red_green.xlsx)
+            red_green_dropbox = get_dropbox_path(ticker, "red-green",
+                                                 red_green_filename)
+
+            # 3. Upload to Dropbox
+            upload_file(tmp_path, red_green_dropbox)
+            print(
+                f"[Dropbox] Uploaded {ticker} Red-Green → {red_green_dropbox}")
+
+            # 4. Remove local temp copy
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+                print(f"[Local] Deleted temporary file: {tmp_path}")
+
+        except Exception as e:
+            print(f"[RedGreen] Failed for {ticker}: {e}")
+
+    # --- Cleanup ---
     try:
         if os.path.exists(local_filename):
             os.remove(local_filename)

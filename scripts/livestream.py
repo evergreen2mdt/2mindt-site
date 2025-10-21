@@ -29,6 +29,25 @@ from dropbox_utils import (
 st.cache_data = lambda *a, **k: (lambda f: f)
 
 
+
+
+def highlight_z(val):
+    if isinstance(val, (int, float)):
+        if val >= 3:
+            return "background-color: red; color: white"
+        elif val >= 2:
+            return "background-color: orange"
+        elif val >= 1:
+            return "background-color: yellow"
+        elif val <= -3:
+            return "background-color: darkblue; color: white"
+        elif val <= -2:
+            return "background-color: blue; color: white"
+        elif val <= -1:
+            return "background-color: lightblue"
+    return ""
+
+
 def load_futures_timebands(ticker: str):
     """Load and merge all mapped futures roots (e.g., SPY → ES,MES)."""
     roots = ETF_TO_FUTURES.get(ticker, [])
@@ -154,128 +173,8 @@ def get_paths(ticker: str):
         "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
         "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
     }
-#
-# def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
-#     """
-#     Show est_vol_at_close from ES and MES futures with ETF-style axis:
-#     - All 30m bands labeled
-#     - Date shown only once per day
-#     - ETH shaded grey
-#     - 20d avg baseline at 1.0
-#     """
-#     import matplotlib.pyplot as plt
-#     import numpy as np
-#     import pandas as pd
-#     import streamlit as st
-#
-#     if df.empty:
-#         st.info("No futures data to display.")
-#         return
-#
-#     fut_syms = ETF_TO_FUTURES.get(ticker, [])
-#     if not fut_syms:
-#         st.info("No futures mappings found.")
-#         return
-#
-#     # --- Load each futures file ---
-#     rows = []
-#     for sym in fut_syms:
-#         path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
-#         try:
-#             tmp = dbx_read_excel(path, sheet_name="Timebands")
-#             if tmp is None or tmp.empty:
-#                 continue
-#
-#             tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
-#             tmp = tmp[tmp["date"].notna()].copy()
-#             tmp["Root"] = sym.upper()
-#             rows.append(tmp[["date", "band", "session", "est_vol_at_close", "Root"]])
-#         except Exception as e:
-#             st.warning(f"{sym}: {e}")
-#
-#     if not rows:
-#         st.info("No futures timeband data found.")
-#         return
-#
-#     df = pd.concat(rows, ignore_index=True)
-#
-#     # --- Combine date + band start for ordering ---
-#     df["band_start"] = df["band"].str.split("–").str[0]
-#     df["band_dt"] = pd.to_datetime(
-#         df["date"].astype(str) + " " + df["band_start"], errors="coerce"
-#     )
-#     df = df.sort_values("band_dt")
-#
-#     # --- Match ETF chart: last 3 trading days ---
-#     all_dates = sorted(df["date"].unique())
-#     keep_dates = all_dates[-3:] if len(all_dates) >= 3 else all_dates
-#     df = df[df["date"].isin(keep_dates)]
-#
-#     # --- Pivot each futures root into its own column ---
-#     pivot = (
-#         df.pivot_table(
-#             index=["date", "band", "band_dt", "session"],
-#             columns="Root",
-#             values="est_vol_at_close",
-#             aggfunc="mean"
-#         )
-#         .reset_index()
-#         .sort_values("band_dt")
-#     )
-#     pivot.columns.name = None
-#     pivot = pivot.reset_index(drop=True)
-#
-#     # === Build axis labels identical to ETF Timebands ===
-#     xticks, prev_date = [], None
-#     for d, b in zip(pivot["date"], pivot["band"]):
-#         # Ensure clean types
-#         d = pd.to_datetime(d, errors="coerce")
-#         if pd.isna(d):
-#             xticks.append(b.split("–")[0])
-#             continue
-#         cd = d.date()
-#         if cd != prev_date:
-#             xticks.append(f"{cd} {b.split('–')[0]}")
-#             prev_date = cd
-#         else:
-#             xticks.append(b.split("–")[0])
-#
-#     x_vals = np.arange(len(xticks))
-#
-#     # --- Plot ---
-#     fig, ax = plt.subplots(figsize=(14, 5))
-#     width = 0.4
-#     roots = [c for c in pivot.columns if c not in ["date", "band", "band_dt", "session"]]
-#     colors = ["#1f77b4", "#66b3ff"]
-#
-#     for i, root in enumerate(roots):
-#         y = pivot[root].fillna(0).values
-#         offset = (i - 0.5) * width
-#         ax.bar(
-#             x_vals + offset, y, width=width,
-#             label=root, color=colors[i % len(colors)], alpha=0.9
-#         )
-#
-#     # --- Baseline (1.0 = 20-day avg) ---
-#     ax.axhline(1.0, linestyle="--", color="gray", linewidth=1, label="20d avg (×1.0)")
-#
-#     # --- Shade ETH bands ---
-#     for i, sess in enumerate(pivot["session"]):
-#         if sess == "ETH":
-#             ax.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.15)
-#
-#     # --- Axis formatting identical to ETF chart ---
-#     ax.set_xticks(x_vals)
-#     ax.set_xticklabels(xticks, rotation=90, fontsize=7)
-#     ax.set_ylabel("Est. Volume Ratio (×)")
-#     ax.set_title(f"{ticker} Futures Estimated Volume at Close (× vs 20-Day Avg)")
-#     ax.grid(True, axis="y", linestyle="--", alpha=0.6)
-#     ax.legend(fontsize=8)
-#     fig.subplots_adjust(bottom=0.25)
-#     plt.tight_layout()
-#
-#     st.pyplot(fig)
-#     plt.close(fig)
+
+
 def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
     """
     Show est_vol_at_close from ES and MES futures with ETF-style axis.
@@ -311,7 +210,11 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
             tmp["date"] = pd.to_datetime(tmp["date"], errors="coerce")
             tmp = tmp[tmp["date"].notna()].copy()
             tmp["Root"] = sym.upper()
-            rows.append(tmp[["date", "band", "session", "est_vol_at_close", "Root"]])
+            # Include 20d stats if present
+            keep_cols = ["date", "band", "session", "est_vol_at_close",
+                         "avg_20d", "stdev_20d", "Root"]
+            available = [c for c in keep_cols if c in tmp.columns]
+            rows.append(tmp[available])
             print(f"[DEBUG] Loaded {len(tmp)} rows from {sym}")
 
         except Exception as e:
@@ -385,8 +288,22 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
             label=root, color=colors[i % len(colors)], alpha=0.9
         )
 
-    # --- Baseline (1.0 = 20-day avg) ---
-    ax.axhline(1.0, linestyle="--", color="gray", linewidth=1, label="20d avg (×1.0)")
+
+    # --- Baseline (1.0 = 20-day avg, show ±1σ/±2σ/±3σ) ---
+    if "avg_20d" in df.columns and "stdev_20d" in df.columns:
+        mean_val = df["avg_20d"].mean()
+        std_val = df["stdev_20d"].mean()
+        if mean_val > 0 and not np.isnan(std_val):
+            sigma_ratio = std_val / mean_val
+            ax.axhline(1.0, color="black", linestyle="--", linewidth=1,
+                       label="20d avg")
+
+            for n, color in [(1, "orange"), (2, "red"), (3, "darkred")]:
+                ax.axhline(1.0 + n * sigma_ratio, color=color,
+                           linestyle="--", label=f"+{n}σ")
+        #     for n, color in [(1, "lightblue"), (2, "blue"), (3, "navy")]:
+        #         ax.axhline(1.0 - n * sigma_ratio, color=color,
+        #                    linestyle="--", label=f"−{n}σ")
 
     # --- Shade ETH bands ---
     for i, sess in enumerate(pivot["session"]):
@@ -590,31 +507,39 @@ class LiveStreamDashboard:
             # --- Display filtered set ---
             st.subheader("Unhit Targets (Last 10 Days)")
             st.dataframe(
-                df_filtered[["date", "gap_type", "open", "previous_close", "gap value"]]
+                df_filtered.sort_values("date", ascending=False)
+                   [["date", "gap_type", "open", "previous_close", "gap value"]]
                 .rename(columns={
                     "date": "Date",
                     "gap_type": "Gap Type",
                     "open": "Open",
                     "previous_close": "Previous Close",
                     "gap value": "Gap Value"
-                }),
+                })
+                .reset_index(drop=True),
+                hide_index=True,
                 width="stretch"
             )
 
             # --- Days-to-Target (Stats in Days) ---
             st.subheader("Days to Target (Stats in Days)")
-            stats_table = df_days[df_days["gap_type"].isin(df_filtered["gap_type"])]
-            st.dataframe(stats_table, width="stretch")
+            stats_table = df_days[
+                df_days["gap_type"].isin(df_filtered["gap_type"])]
+            st.dataframe(stats_table.reset_index(drop=True), hide_index=True,
+                         width="stretch")
 
             # --- MAM (PTS) ---
             st.subheader("Max Adverse Movement Data (PTS)")
             mam_pts = df_mam[df_mam["gap_type"].isin(df_filtered["gap_type"])]
-            st.dataframe(mam_pts, width="stretch")
+            st.dataframe(mam_pts.reset_index(drop=True), hide_index=True,
+                         width="stretch")
 
             # --- MAM (DAYS) ---
             st.subheader("Max Adverse Movement Data (DAYS)")
-            mam_days = df_mam_days[df_mam_days["gap_type"].isin(df_filtered["gap_type"])]
-            st.dataframe(mam_days, width="stretch")
+            mam_days = df_mam_days[
+                df_mam_days["gap_type"].isin(df_filtered["gap_type"])]
+            st.dataframe(mam_days.reset_index(drop=True), hide_index=True,
+                         width="stretch")
 
             return today_target if not today_target.empty else None
 
@@ -650,9 +575,18 @@ class LiveStreamDashboard:
                 "Spot": f"{spot_price:.2f}",
                 "MC Day0": f"{mc_row.get('prob_hit_day_0', np.nan):.0%}",
                 "MC Adj": f"{mc_row.get('prob_hit_day_0_adjusted', np.nan):.0%}",
-                "Final Touch": f"{touch_row['prob_hit_day_0'].max():.0%}" if not touch_row.empty else "—",
+                "Final Touch": (
+                    f"{touch_row['prob_hit_day_0'].max():.0%}"
+                    if not touch_row.empty else "—"
+                ),
             }])
-            st.dataframe(prob_table, width="stretch")
+
+            st.dataframe(
+                prob_table.reset_index(drop=True),
+                hide_index=True,
+                width="stretch"
+            )
+
 
 
         except Exception as e:
@@ -710,7 +644,7 @@ class LiveStreamDashboard:
                     x="strike", y="pinning_strength_k",
                     labels={"pinning_strength_k": "×1k", "strike": "Strike"},
                     # title="Pinning Strength",
-                    color_discrete_sequence=["blue"]
+                    color_discrete_sequence=["#FF1493"]
                 )
 
                 wp = weighted_pin(pin_df.rename(
@@ -998,8 +932,25 @@ class LiveStreamDashboard:
             x_vals = np.arange(len(df_plot))
             y_ratio = pd.to_numeric(df_plot["ratio_to_avg_20d"],
                                     errors="coerce").fillna(0).values
+
+            # Main bar plot
             ax1.bar(x_vals, y_ratio, alpha=0.6, label="Vol / 20d Avg")
-            ax1.axhline(1.0, linestyle="--", linewidth=1, label="20d avg")
+            ax1.axhline(1.0, color="black", linestyle="--", linewidth=1, label="20d avg")
+
+            # --- Add ±1σ, ±2σ, ±3σ reference lines based on 20d stdev ---
+            if "avg_20d" in df_plot.columns and "stdev_20d" in df_plot.columns:
+                mean_val = df_plot["avg_20d"].mean()
+                std_val = df_plot["stdev_20d"].mean()
+                if mean_val > 0 and not np.isnan(std_val):
+                    sigma_ratio = std_val / mean_val
+                    for n, color in [(1, "orange"), (2, "red"), (3, "darkred")]:
+                        ax1.axhline(1.0 + n * sigma_ratio, color=color,
+                                    linestyle="--", label=f"+{n}σ")
+                    # for n, color in [(1, "lightblue"), (2, "blue"),
+                    #                  (3, "navy")]:
+                    #     ax1.axhline(1.0 - n * sigma_ratio, color=color,
+                    #                 linestyle="--", label=f"−{n}σ")
+
             ax1.set_ylabel("Volume Ratio")
             ax1.set_xticks(x_vals)
 
@@ -1011,13 +962,15 @@ class LiveStreamDashboard:
                 prev_date = cd
             ax1.set_xticklabels(xticks, rotation=90, fontsize=7)
             ax1.grid(True, linestyle="--", alpha=0.6)
-            ax1.legend(fontsize=8)
+            ax1.legend(fontsize=8, loc="upper right")
 
+            # Shade ETH sessions
             if "session" in df_plot.columns:
                 for i, sess in enumerate(df_plot["session"]):
                     if sess == "ETH":
                         ax1.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.2)
 
+            # Overlay candlesticks
             ax2 = ax1.twinx()
             candle_width = 0.6
             for i, r in df_plot.iterrows():
@@ -1044,6 +997,31 @@ class LiveStreamDashboard:
             now = datetime.now(tz)
             df_prev["est_vol_at_close"] = df_prev["ratio_to_avg_20d"]
 
+
+
+            # Optional: filter to today's data only
+            today = pd.Timestamp.now().date()
+            if "date" in df_prev.columns:
+                df_today = df_prev[df_prev["date"] == today]
+            else:
+                df_today = df_prev.copy()
+
+            # include zscore_20d directly in the per-futures tables
+            if "zscore_20d" in df_prev.columns:
+                keep_cols = [
+                    "date", "timestamp", "generated_at", "granularity",
+                    "session", "band", "Total_barCount", "Total_volume",
+                    "avg_20d", "stdev_20d", "zscore_20d",
+                    "sigma_flag", "ratio_to_avg_20d", "est_vol_at_close"
+                ]
+            else:
+                keep_cols = [
+                    "date", "timestamp", "generated_at", "granularity",
+                    "session", "band", "Total_barCount", "Total_volume",
+                    "avg_20d", "stdev_20d", "ratio_to_avg_20d",
+                    "est_vol_at_close"
+                ]
+
             def _dt_on_day(d, hhmm):
                 hh, mm = map(int, str(hhmm).split(":"))
                 return datetime(d.year, d.month, d.day, hh, mm, tzinfo=tz)
@@ -1061,17 +1039,50 @@ class LiveStreamDashboard:
 
             keep_cols = [
                 "date", "timestamp", "generated_at", "granularity",
-                "session", "open", "high", "low", "close", "start", "end", "band", "barCount", "volume",
-                "avg_20d", "ratio_to_avg_20d", "est_vol_at_close"
+                "session", "band", "Total_barCount", "Total_volume",
+                "avg_20d", "stdev_20d", "zscore_20d", "sigma_flag",
+                "ratio_to_avg_20d", "est_vol_at_close"
             ]
+
+            print(df_prev.dtypes)
+            print(df_prev.columns)
+
             df_prev = df_prev[[c for c in keep_cols if c in df_prev.columns]]
             df_prev = df_prev.sort_values(["date", "timestamp"],
                                           ascending=[False, False])
 
             st.subheader("Timebands")
-            st.dataframe(df_prev, width="stretch")
+            st.subheader("Timebands")
 
-        # ===== Futures Volume Comparison (Side-by-Side)
+            numeric_cols = [
+                "Total_barCount", "Total_volume", "avg_20d",
+                "stdev_20d", "zscore_20d", "ratio_to_avg_20d",
+                "est_vol_at_close"
+            ]
+
+            df_display = df_prev.copy()
+            for col in numeric_cols:
+                if col in df_display.columns:
+                    df_display[col] = pd.to_numeric(df_display[col],
+                                                    errors="coerce")
+
+            st.dataframe(
+                df_display.style
+                .applymap(highlight_z, subset=["zscore_20d"])
+                .format({
+                    "Total_barCount": "{:,.0f}",
+                    "Total_volume": "{:,.0f}",
+                    "avg_20d": "{:,.0f}",
+                    "stdev_20d": "{:,.0f}",
+                    "zscore_20d": "{:.3f}",
+                    "ratio_to_avg_20d": "{:.3f}",
+                    "est_vol_at_close": "{:.3f}",
+                }),
+                hide_index=True,
+                width="stretch"
+            )
+
+            # ===== Futures Volume Comparison (Side-by-Side)
             try:
                 fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
                 if fut_syms:
@@ -1114,14 +1125,47 @@ class LiveStreamDashboard:
                     keep_cols = [
                         "date", "timestamp", "generated_at", "granularity",
                         "session", "band", "Total_barCount", "Total_volume",
-                        "avg_20d", "ratio_to_avg_20d", "est_vol_at_close"
+                        "avg_20d", "stdev_20d", "zscore_20d", "sigma_flag", "ratio_to_avg_20d", "est_vol_at_close"
                     ]
                     fdf = fdf[[c for c in keep_cols if c in fdf.columns]]
+                    today = pd.Timestamp.now(
+                        tz=ZoneInfo("America/New_York")).date()
+                    fdf = fdf[fdf["date"] == today]
+
                     fdf = fdf.sort_values(["date", "timestamp"],
                                           ascending=[False, False])
 
                     st.subheader(f"{sym} Futures Timebands")
-                    st.dataframe(fdf, width="stretch")
+
+                    numeric_cols = [
+                        "Total_barCount", "Total_volume", "avg_20d",
+                        "stdev_20d", "zscore_20d", "ratio_to_avg_20d",
+                        "est_vol_at_close"
+                    ]
+
+                    fdf_fmt = fdf.copy()
+                    for col in numeric_cols:
+                        if col in fdf_fmt.columns:
+                            fdf_fmt[col] = pd.to_numeric(fdf_fmt[col],
+                                                         errors="coerce")
+
+                    st.dataframe(
+                        fdf_fmt.style
+                        .applymap(highlight_z, subset=["zscore_20d"])
+                        .format({
+                            "Total_barCount": "{:,.0f}",
+                            "Total_volume": "{:,.0f}",
+                            "avg_20d": "{:,.0f}",
+                            "stdev_20d": "{:,.0f}",
+                            "zscore_20d": "{:.3f}",
+                            "ratio_to_avg_20d": "{:.3f}",
+                            "est_vol_at_close": "{:.3f}",
+                        }),
+                        hide_index=True,
+                        width="stretch"
+                    )
+
+
             else:
                 st.info("No futures mappings found for this ticker.")
         except Exception as e:
