@@ -11,7 +11,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import plotly.express as px
+import plotly.graph_objects as go
+
 import streamlit as st
+import yfinance as yf  # for VIX data
 
 # --- project
 from config import (
@@ -24,6 +27,7 @@ from dropbox_utils import (
     get_dropbox_client,
     read_excel as dbx_read_excel,
 )
+US_EASTERN = ZoneInfo("America/New_York")
 
 
 st.cache_data = lambda *a, **k: (lambda f: f)
@@ -358,6 +362,92 @@ def get_base64_image(image_path):
         data = f.read()
     return base64.b64encode(data).decode()
 
+# ---------- Volatility Panel Helpers ----------
+
+def _today(dt=None):
+    return (dt or datetime.now(tz=US_EASTERN)).date()
+
+
+@st.cache_data(ttl=60)
+def _load_vix():
+    """Return latest VIX close (implied volatility proxy)."""
+    try:
+        vix = yf.download("^VIX", period="5d", interval="30m", progress=False)
+        if not vix.empty:
+            return float(vix["Close"].dropna().iloc[-1])
+    except Exception:
+        return None
+    return None
+
+
+@st.cache_data(ttl=60)
+def _load_spy_timebands_ratio(ticker: str):
+    """Get latest ratio_to_avg_20d for SPY timebands."""
+    try:
+        path = get_dropbox_path(ticker, "timebands", f"{ticker.lower()}_timeband_volume.xlsx")
+        tb = dbx_read_excel(path, sheet_name="Timebands")
+        tb["date"] = pd.to_datetime(tb.get("date"), errors="coerce").dt.date
+        tb = tb[tb["date"] == _today()]
+        if tb.empty:
+            return np.nan
+        if "session" in tb.columns:
+            tb = tb[tb["session"] == "RTH"]
+        tb = tb.sort_values("timestamp" if "timestamp" in tb.columns else "band").tail(1)
+        return float(tb["ratio_to_avg_20d"].iloc[0]) if "ratio_to_avg_20d" in tb.columns else np.nan
+    except Exception:
+        return np.nan
+
+
+@st.cache_data(ttl=60)
+def _load_futures_est_vol_close(ticker: str):
+    """Average est_vol_at_close across mapped futures."""
+    roots = ETF_TO_FUTURES.get(ticker, [])
+    vals = []
+    for sym in roots:
+        try:
+            folder = f"/{ticker.lower()}/{sym.lower()}-timebands-volume"
+            path = f"{folder}/{sym.lower()}_timeband_volume.xlsx"
+            tb = dbx_read_excel(path, sheet_name="Timebands")
+            tb["date"] = pd.to_datetime(tb.get("date"), errors="coerce").dt.date
+            tb = tb[tb["date"] == _today()]
+            if tb.empty:
+                continue
+            if "session" in tb.columns:
+                tb = tb[tb["session"] == "RTH"]
+            tb = tb.sort_values("timestamp" if "timestamp" in tb.columns else "band").tail(1)
+            if "est_vol_at_close" in tb.columns:
+                vals.append(float(tb["est_vol_at_close"].iloc[0]))
+        except Exception:
+            continue
+    return float(np.nanmean(vals)) if vals else np.nan
+
+
+@st.cache_data(ttl=60)
+def _load_gamma_pin_metrics(ticker: str):
+    """Read latest options file and extract spot, weighted pin."""
+    info = {"spot": np.nan, "weighted_pin": np.nan, "gex_total": np.nan}
+    try:
+        folder = f"/{ticker.lower()}/{ticker.lower()}-options-data/"
+        dbx = get_dropbox_client()
+        res = dbx.files_list_folder(folder)
+        entries = [e for e in res.entries if e.name.endswith(".xlsx")]
+        entries.sort(key=lambda e: e.client_modified, reverse=True)
+        if not entries:
+            return info
+        path = f"{folder}{entries[0].name}"
+        df = dbx_read_excel(path, sheet_name="options and pinning")
+        cols = {c.lower(): c for c in df.columns}
+        if "spot" in cols:
+            s = pd.to_numeric(df[cols["spot"]], errors="coerce").dropna()
+            if not s.empty:
+                info["spot"] = float(s.mode().iloc[0])
+        for key in ["weighted_pin", "weighted pin"]:
+            if key in cols:
+                info["weighted_pin"] = float(pd.to_numeric(df[cols[key]], errors="coerce").dropna().iloc[0])
+                break
+    except Exception:
+        pass
+    return info
 
 # === Dashboard Class ===
 class LiveStreamDashboard:
@@ -668,7 +758,7 @@ class LiveStreamDashboard:
                                   # annotation_position="top",
                                   # annotation=dict(textangle=-90))
 
-                # --- legend for vlines ---
+
                 # --- legend for vlines with numeric values ---
                 fig.add_scatter(
                     x=[None], y=[None],
@@ -903,6 +993,132 @@ class LiveStreamDashboard:
         except Exception as e:
             st.error(f"Charts failed: {e}")
 
+    # ===============================
+    # Volatility Panel
+    # ===============================
+    def render_volatility_panel(self):
+        """Visual volatility dashboard showing realized, implied, and dealer context."""
+        ticker = self.ticker.upper()
+        st.subheader("Volatility Panel")
+
+        # --- Load data
+        etf_ratio = _load_spy_timebands_ratio(ticker)
+        fut_est = _load_futures_est_vol_close(ticker)
+        pin_info = _load_gamma_pin_metrics(ticker)
+        # --- Compute weighted pin dynamically from latest snapshot ---
+        try:
+            folder = f"/{self.ticker.lower()}/{self.ticker.lower()}-options-data/"
+            res = self.dbx.files_list_folder(folder)
+            entries = [e for e in res.entries if e.name.endswith(".xlsx")]
+            entries.sort(key=lambda e: e.client_modified, reverse=True)
+            if entries:
+                latest = f"{folder}{entries[0].name}"
+                df_pin = dbx_read_excel(latest, sheet_name="pinning metrics")
+                df_raw = dbx_read_excel(latest, sheet_name="raw options")
+                spot = \
+                pd.to_numeric(df_raw["spot"], errors="coerce").mode().iloc[0]
+                pin_df = df_pin.rename(
+                    columns={"pinning_strength": "pin_strength"})
+                pin_val = weighted_pin(pin_df, spot, window_abs=10, lam=3.0)
+                if not np.isnan(pin_val):
+                    pin_info["weighted_pin"] = pin_val
+                    pin_info["spot"] = spot
+        except Exception as e:
+            print(f"[weighted pin dynamic] {self.ticker}: {e}")
+
+        vix = _load_vix()
+
+        spot = pin_info.get("spot", np.nan)
+        pin = pin_info.get("weighted_pin", np.nan)
+        pin_diff = (spot - pin) if (not np.isnan(spot) and not np.isnan(pin)) else np.nan
+
+        # --- States
+        realized_state = (
+            "↑ expansion"
+            if (fut_est is not np.nan and fut_est >= 1.2)
+            or (etf_ratio is not np.nan and etf_ratio >= 1.2)
+            else "↔ normal"
+            if (0.8 <= (np.nanmean([fut_est, etf_ratio])
+                       if not np.isnan(np.nanmean([fut_est, etf_ratio])) else 0) <= 1.2)
+            else "↓ compression"
+        )
+
+        gamma_state = (
+            "long-gamma pin"
+            if (not np.isnan(pin_diff) and abs(pin_diff) <= 1.0)
+            else ("short-gamma risk" if (not np.isnan(pin_diff) and spot < pin)
+                  else "neutral")
+        )
+
+        import plotly.graph_objects as go
+
+        # === Needle-style meter function ===
+        def gauge(val, title):
+            """Needle-style gauge for volatility metrics."""
+            fig = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=val if not np.isnan(val) else 0,
+                gauge={
+                    "shape": "angular",
+                    "axis": {"range": [0, 2], "tickwidth": 1, "tickcolor": "black"},
+                    "bar": {"color": "rgba(0,0,0,0)"},
+                    "steps": [
+                        {"range": [0, 0.8], "color": "green"},
+                        {"range": [0.8, 1.2], "color": "yellow"},
+                        {"range": [1.2, 2.0], "color": "red"},
+                    ],
+                    "threshold": {
+                        "line": {"color": "black", "width": 4},
+                        "thickness": 0.8,
+                        "value": val if not np.isnan(val) else 0
+                    },
+                },
+                title={"text": title, "font": {"size": 14}}
+            ))
+            fig.update_layout(height=200, margin=dict(t=30, b=0, l=0, r=0))
+            return fig
+
+        # === Three-column layout with titles ===
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown("<h5 style='text-align:center;'>ETF Realized Ratio</h5>",
+                        unsafe_allow_html=True)
+            st.plotly_chart(gauge(etf_ratio, ""), use_container_width=True)
+        with c2:
+            st.markdown("<h5 style='text-align:center;'>Futures Est. Volatility @ Close</h5>",
+                        unsafe_allow_html=True)
+            st.plotly_chart(gauge(fut_est, ""), use_container_width=True)
+        with c3:
+            st.markdown("<h5 style='text-align:center;'>VIX (Scaled)</h5>",
+                        unsafe_allow_html=True)
+            st.plotly_chart(gauge(vix / 20 if vix is not None else np.nan, ""),
+                            use_container_width=True)
+
+        # --- Caption below gauges
+        st.caption(
+            f"State: {realized_state}. "
+            f"Spot {'above' if pin_diff>0 else 'below' if pin_diff<0 else '≈'} pin by {abs(pin_diff):.2f}."
+            if not np.isnan(pin_diff)
+            else f"State: {realized_state}. Pin unknown."
+        )
+
+        # --- Intraday realized ratio trend
+        try:
+            path = get_dropbox_path(ticker, "timebands",
+                                    f"{ticker.lower()}_timeband_volume.xlsx")
+            tb = dbx_read_excel(path, sheet_name="Timebands")
+            tb["ts"] = pd.to_datetime(tb.get("timestamp", tb.get("date")),
+                                      errors="coerce")
+            tb = tb[(tb["ts"].dt.date == _today())
+                    & (tb.get("session", "RTH") == "RTH")]
+            tb = tb.sort_values("ts")
+            if not tb.empty and "ratio_to_avg_20d" in tb.columns:
+                st.line_chart(tb.set_index("ts")["ratio_to_avg_20d"], height=120)
+        except Exception:
+            pass
+
+
+
     def render_timebands(self):
         try:
             self.paths["timebands_file"] = get_dropbox_path(
@@ -1052,7 +1268,7 @@ class LiveStreamDashboard:
                                           ascending=[False, False])
 
             st.subheader("Timebands")
-            st.subheader("Timebands")
+
 
             numeric_cols = [
                 "Total_barCount", "Total_volume", "avg_20d",
@@ -1180,6 +1396,10 @@ class LiveStreamDashboard:
             self.render_narratives(today_target)
             self.render_charts(today_target)
         self.render_timebands()
+        self.render_volatility_panel()
+
+
+
 
 
 # === Page Config ===
