@@ -32,6 +32,20 @@ US_EASTERN = ZoneInfo("America/New_York")
 
 st.cache_data = lambda *a, **k: (lambda f: f)
 
+def load_futures_model(ticker="SPY"):
+    """Load latest futures microstructure model (e.g., ES + MES) from Dropbox."""
+    roots = ETF_TO_FUTURES.get(ticker.upper(), [])
+    frames = []
+    for fut in roots:
+        path = f"/{ticker.lower()}/{fut.lower()}-futures-model/{fut.lower()}_futures_model.xlsx"
+        try:
+            df = dbx_read_excel(path)
+            if not df.empty:
+                frames.append(df)
+        except Exception:
+            continue
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
 
 
 
@@ -456,6 +470,130 @@ class LiveStreamDashboard:
         self.dbx = get_dropbox_client()
         self.paths = get_paths(ticker)
         self.snapshot_path = None  # Delay initialization
+
+    def render_futures_model(self):
+        """Render the Futures Microstructure Model section."""
+        st.subheader("Futures Microstructure Model")
+
+        df = load_futures_model(self.ticker)
+        if df.empty:
+            st.info("No futures model data available.")
+            return
+
+        # --- Clean and order
+        df = df.sort_values("future").reset_index(drop=True)
+
+        # --- Display compact table with extended columns
+        display_cols = [
+            "future", "date", "basis_level", "basis_zscore",
+            "calendar_spread", "spread_roc", "term_structure_flag",
+            "volume_rank", "oi_delta", "rir", "trendiness", "regime"
+        ]
+        display_cols = [c for c in display_cols if c in df.columns]
+
+        st.dataframe(
+            df[display_cols]
+            .style.format({
+                "basis_level": "{:.2f}",
+                "basis_zscore": "{:.2f}",
+                "calendar_spread": "{:.2f}",
+                "spread_roc": "{:.2f}",
+                "volume_rank": "{:.2f}",
+                "oi_delta": "{:.0f}",
+                "trendiness": "{:.2f}",
+                "rir": "{:.2f}"
+            }),
+            hide_index=True,
+            use_container_width=True,
+        )
+
+        # --- Summary metrics row
+        col1, col2, col3 = st.columns(3)
+        latest = df.iloc[-1]
+        col1.metric("Regime", latest.get("regime", "—"))
+        col2.metric("Basis Z", f"{latest.get('basis_zscore', 0):.2f}")
+        col3.metric("Trendiness", f"{latest.get('trendiness', 0):.2f}")
+
+        # --- Chart layout side-by-side
+        c1, c2 = st.columns(2)
+
+        # === Chart 1: Basis Z-Score by Contract ===
+        with c1:
+            fig1, ax1 = plt.subplots(figsize=(6, 3))
+            ax1.bar(df["future"], df["basis_zscore"], color="#1f77b4",
+                    alpha=0.7)
+            ax1.axhline(0, color="gray", linewidth=0.8)
+            ax1.set_title(f"{self.ticker} Futures Basis Z-Score", fontsize=11)
+            ax1.set_xlabel("Contract")
+            ax1.set_ylabel("Z-Score")
+            for i, row in df.iterrows():
+                ax1.text(
+                    i, row["basis_zscore"] + 0.05,
+                    f"{row['basis_zscore']:.2f}",
+                    ha="center", va="bottom", fontsize=8
+                )
+            ax1.grid(axis="y", linestyle="--", alpha=0.4)
+            st.pyplot(fig1)
+            plt.close(fig1)
+
+        # === Chart 2: ES vs MES Comparison ===
+        with c2:
+            if set(df["future"]) >= {"ES", "MES"}:
+                sub = df[df["future"].isin(["ES", "MES"])].copy()
+                fig2, ax2 = plt.subplots(figsize=(6, 3))
+                ax2.bar(
+                    sub["future"], sub["basis_zscore"],
+                    label="Basis Z", color="#1f77b4", alpha=0.6
+                )
+                ax2.bar(
+                    sub["future"], sub["trendiness"],
+                    label="Trendiness", color="#b38f6b", alpha=0.5
+                )
+                ax2.axhline(0, color="gray", linewidth=0.8)
+                for i, row in sub.iterrows():
+                    ax2.text(
+                        i, row["basis_zscore"] + 0.05,
+                        f"{row['basis_zscore']:.2f}",
+                        ha="center", fontsize=8
+                    )
+                ax2.set_title(f"{self.ticker} Futures Comparison (ES vs MES)",
+                              fontsize=11)
+                ax2.set_ylabel("Z / Trend Value")
+                ax2.legend(fontsize=8)
+                ax2.grid(axis="y", linestyle="--", alpha=0.4)
+                st.pyplot(fig2)
+                plt.close(fig2)
+
+                # --- Interpretive summary
+                es_row = sub[sub["future"] == "ES"].iloc[-1]
+                mes_row = sub[sub["future"] == "MES"].iloc[-1]
+                diff = es_row["basis_zscore"] - mes_row["basis_zscore"]
+
+                msg = f"ES Z = {es_row['basis_zscore']:.2f}, MES Z = {mes_row['basis_zscore']:.2f}. "
+                if abs(diff) < 0.25:
+                    msg += "Contracts aligned → sentiment consistent."
+                elif diff > 0:
+                    msg += "ES premium > MES → institutional risk-on."
+                else:
+                    msg += "MES leading → retail optimism or short covering."
+                st.caption(msg)
+
+        # --- Interpretive bullet summary (compact narrative)
+        comments = []
+        if latest["basis_zscore"] > 1:
+            comments.append("Futures rich vs ETF → bullish bias.")
+        elif latest["basis_zscore"] < -1:
+            comments.append("Futures discount → cautious tone.")
+        if latest["term_structure_flag"] == "backwardation":
+            comments.append("Curve inverted → volatility or event pricing.")
+        if latest["rir"] > 1.5:
+            comments.append("Realized > implied → volatility expansion.")
+        elif latest["rir"] < 0.8:
+            comments.append("Volatility compression phase.")
+        if latest["oi_delta"] > 0:
+            comments.append("Rising OI confirms conviction behind move.")
+        narrative = " ".join(comments) if comments else "Neutral regime."
+        st.caption(narrative)
 
     def _format_snapshot_label(self, path: str) -> str:
         if not path:
@@ -1397,9 +1535,7 @@ class LiveStreamDashboard:
             self.render_charts(today_target)
         self.render_timebands()
         self.render_volatility_panel()
-
-
-
+        self.render_futures_model()
 
 
 # === Page Config ===

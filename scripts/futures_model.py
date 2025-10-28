@@ -1,250 +1,199 @@
-# futures_model.py
-# -*- coding: utf-8 -*-
-
-from io import BytesIO
+# futures_model.py — dynamic ETF → futures mapping (no hardcoded SPY/MES)
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import numpy as np
 import pandas as pd
+import yfinance as yf
+import warnings
+from config import TICKER_MAP, ETF_TO_FUTURES
+from dropbox_utils import upload_file
 
-from config import ETF_TO_FUTURES
-from dropbox_utils import get_dropbox_client, read_excel as dbx_read_excel
-
-try:
-    import yfinance as yf
-except Exception:
-    yf = None
-
+warnings.filterwarnings("ignore", category=FutureWarning)
 US_EASTERN = ZoneInfo("America/New_York")
 
 
-# =========================
-# Core metric computations
-# =========================
-def compute_basis(fut_price: float, spot_price: float) -> float:
-    if np.isnan(fut_price) or np.isnan(spot_price) or spot_price == 0:
+# ------------------ Core metrics ------------------
+def compute_basis_zscore(series, window=20):
+    s = pd.Series(series).dropna()
+    if len(s) < 5:
         return np.nan
-    return float((fut_price - spot_price) / spot_price)
+    mu, sd = s.mean(), s.std(ddof=0)
+    return (s.iloc[-1] - mu) / sd if sd > 0 else np.nan
 
 
-def zscore(series: pd.Series, window: int = 20) -> float:
-    s = pd.to_numeric(series, errors="coerce").dropna()
-    if len(s) < max(3, window):
+def compute_realized_range(df):
+    if df.empty or not {"high", "low"}.issubset(df.columns):
         return np.nan
-    w = s.tail(window)
-    mu, sd = float(w.mean()), float(w.std(ddof=0))
-    if sd == 0:
+    return float(df["high"].max() - df["low"].min())
+
+
+def estimate_implied_range_from_vix(spot, vix):
+    if np.isnan(spot) or np.isnan(vix):
         return np.nan
-    return float((s.iloc[-1] - mu) / sd)
+    return float(spot * (vix / 100.0) / np.sqrt(252))
 
 
-def compute_realized_range(df_day: pd.DataFrame) -> float:
-    if df_day.empty or not {"high", "low"}.issubset(df_day.columns):
+def compute_realized_implied_ratio(realized, implied):
+    if np.isnan(realized) or np.isnan(implied) or implied <= 0:
         return np.nan
-    hi = pd.to_numeric(df_day["high"], errors="coerce").max()
-    lo = pd.to_numeric(df_day["low"], errors="coerce").min()
-    if np.isnan(hi) or np.isnan(lo):
+    return float(realized / implied)
+
+
+def compute_trendiness(o, c, h, l):
+    if any(np.isnan(x) for x in [o, c, h, l]):
         return np.nan
-    return float(hi - lo)
+    tr = max(h, o, c) - min(l, o, c)
+    return abs(c - o) / tr if tr > 0 else np.nan
 
 
-def estimate_implied_range_from_vix(spot: float, vix_level: float) -> float:
-    if np.isnan(spot) or vix_level is None or np.isnan(vix_level):
-        return np.nan
-    return float(spot * (vix_level / 100.0) / np.sqrt(252))
-
-
-def compute_realized_implied_ratio(realized_range: float, implied_range: float) -> float:
-    if np.isnan(realized_range) or np.isnan(implied_range) or implied_range <= 0:
-        return np.nan
-    return float(realized_range / implied_range)
-
-
-def compute_trendiness_score(open_: float, close: float, high: float, low: float) -> float:
-    if any(np.isnan(x) for x in [open_, close, high, low]):
-        return np.nan
-    tr = max(high, open_, close) - min(low, open_, close)
-    if tr <= 0:
-        return np.nan
-    return float(abs(close - open_) / tr)
-
-
-def compute_term_structure_flag(spread_value: float) -> str:
-    if np.isnan(spread_value):
+def compute_term_structure_flag(spread):
+    if np.isnan(spread):
         return "unknown"
-    return "backwardation" if spread_value < 0 else "contango"
+    return "backwardation" if spread < 0 else "contango"
 
 
-# =========================
-# Data helpers
-# =========================
-def _load_etf_spot_from_options(ticker: str) -> float:
-    folder = f"/{ticker.lower()}/{ticker.lower()}-options-data/"
-    dbx = get_dropbox_client()
-    try:
-        res = dbx.files_list_folder(folder)
-        entries = [e for e in res.entries if e.name.endswith(".xlsx")]
-        entries.sort(key=lambda e: e.client_modified, reverse=True)
-        if not entries:
-            return np.nan
-        path = f"{folder}{entries[0].name}"
-        df_raw = dbx_read_excel(path, sheet_name="raw options")
-        s = pd.to_numeric(df_raw.get("spot"), errors="coerce").dropna()
-        return float(s.mode().iloc[0]) if not s.empty else np.nan
-    except Exception:
-        return np.nan
-
-
-def _try_fetch_vix() -> float:
-    if yf is None:
-        return np.nan
-    try:
-        v = yf.download("^VIX", period="5d", interval="30m", progress=False)
-        if v is None or v.empty:
-            return np.nan
-        return float(pd.to_numeric(v["Close"], errors="coerce").dropna().iloc[-1])
-    except Exception:
-        return np.nan
-
-
-def _load_latest_ohlc_from_contract(ticker: str, root: str) -> pd.DataFrame:
-    """Find the most recent available contract sheet with OHLC data."""
-    path = f"/{ticker.lower()}/{root.lower()}-timebands-volume/{root.lower()}_timeband_volume.xlsx"
-    try:
-        xls = pd.ExcelFile(dbx_read_excel(path, sheet_name=None))
-        candidates = []
-
-        for name, df in xls.items():
-            if name.lower() == "timebands":
-                continue
-            if not {"open", "high", "low", "close"}.issubset(df.columns):
-                continue
-
-            df["date"] = pd.to_datetime(df.get("date"), errors="coerce").dt.date
-            df = df[df["date"].notna()]
-            if df.empty:
-                continue
-
-            latest_date = df["date"].max()
-            df = df[df["date"] == latest_date]
-            last_close = pd.to_numeric(df["close"], errors="coerce").dropna().iloc[-1]
-            candidates.append((latest_date, name, df, last_close))
-
-        if not candidates:
-            return pd.DataFrame()
-
-        # pick the contract with the most recent date, then highest close
-        candidates.sort(key=lambda x: (x[0], x[3]), reverse=True)
-        selected = candidates[0][2]
-        return selected.copy()
-    except Exception:
+# ------------------ Data helpers ------------------
+def get_ohlcv_yf(symbol, period="5d", interval="30m"):
+    """Fetch recent OHLCV data for a given symbol via yfinance."""
+    df = yf.download(symbol, period=period, interval=interval, progress=False)
+    if df is None or df.empty:
         return pd.DataFrame()
 
+    # Flatten MultiIndex columns if present
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df.rename(columns=str.lower)
 
-def _latest_ohlc_from_rth(df: pd.DataFrame) -> tuple:
-    if df.empty or not {"open", "high", "low", "close"}.issubset(df.columns):
-        return (np.nan, np.nan, np.nan, np.nan)
-    o = pd.to_numeric(df["open"], errors="coerce").dropna()
-    h = pd.to_numeric(df["high"], errors="coerce").dropna()
-    l = pd.to_numeric(df["low"], errors="coerce").dropna()
-    c = pd.to_numeric(df["close"], errors="coerce").dropna()
-    if any(s.empty for s in [o, h, l, c]):
-        return (np.nan, np.nan, np.nan, np.nan)
-    return (float(o.iloc[0]), float(h.max()), float(l.min()), float(c.iloc[-1]))
+    # ---- build date column explicitly from the index ----
+    idx = pd.to_datetime(df.index, errors="coerce", utc=True)
+    idx = idx.tz_convert("America/New_York").tz_localize(None)
+    df.insert(0, "date", idx.date)  # ensure first column = plain date
 
-
-# =========================
-# Regime classifier
-# =========================
-def classify_regime(realized_implied_ratio: float,
-                    basis_z: float,
-                    term_flag: str,
-                    trendiness: float) -> str:
-    comp = (not np.isnan(realized_implied_ratio)) and (realized_implied_ratio < 0.8)
-    expa = (not np.isnan(realized_implied_ratio)) and (realized_implied_ratio > 1.2)
-    basis_widen = (not np.isnan(basis_z)) and (abs(basis_z) > 1.0)
-    trendy = (not np.isnan(trendiness)) and (trendiness > 0.6)
-
-    if expa and (term_flag == "backwardation" or basis_widen or trendy):
-        return "expansion-active"
-    if comp and (term_flag == "contango") and not basis_widen and not trendy:
-        return "compression-stable"
-    if comp and (term_flag == "backwardation" or basis_widen):
-        return "compression-fragile"
-    if expa and not (basis_widen or trendy):
-        return "expansion-forming"
-    return "neutral"
+    # ---- clean and keep ----
+    keep = [c for c in ["date", "open", "high", "low", "close", "volume"] if c in df.columns]
+    df = df[keep].dropna(subset=["date"]).reset_index(drop=True)
+    return df
 
 
-# =========================
-# Orchestrator
-# =========================
-def run_futures_model(ticker: str) -> pd.DataFrame:
-    ticker = ticker.upper()
-    roots = ETF_TO_FUTURES.get(ticker, [])
-    if not roots:
-        return pd.DataFrame()
 
-    dbx = get_dropbox_client()
-    etf_spot = _load_etf_spot_from_options(ticker)
-    vix_now = _try_fetch_vix()
-    out_rows = []
 
-    for root in roots:
-        df_ohlc = _load_latest_ohlc_from_contract(ticker, root)
-        if df_ohlc.empty:
-            print(f"  [{root}] No valid OHLC found.")
+
+def get_vix():
+    v = yf.download("^VIX", period="5d", interval="30m", progress=False)
+    if v.empty:
+        return np.nan
+    return float(v["Close"].dropna().iloc[-1])
+
+
+# ------------------ Main runner ------------------
+def run_futures_model():
+    all_results = []
+    vix = get_vix()
+
+    for etf, roots in ETF_TO_FUTURES.items():
+        if etf not in TICKER_MAP:
             continue
 
-        latest_date = df_ohlc["date"].max()
-        o, h, l, c = _latest_ohlc_from_rth(df_ohlc)
-        fut_close = c
-        realized_rng = compute_realized_range(df_ohlc)
-        implied_rng = estimate_implied_range_from_vix(etf_spot, vix_now)
-        rir = compute_realized_implied_ratio(realized_rng, implied_rng)
-        basis_lvl = compute_basis(fut_close, etf_spot)
-        trendiness = compute_trendiness_score(o, c, h, l)
-        term_flag = compute_term_structure_flag(np.nan)
+        # --- Load ETF data ---
+        etf_df = get_ohlcv_yf(etf)
+        if etf_df.empty:
+            print(f"[{etf}] No yfinance data.")
+            continue
 
-        basis_z = np.nan
-        regime = classify_regime(rir, basis_z, term_flag, trendiness)
+        spot = etf_df["close"].iloc[-1]
+        latest_date = etf_df["date"].iloc[-1]
 
-        out_rows.append({
-            "date": latest_date,
-            "ticker": ticker,
-            "root": root,
-            "fut_close": fut_close,
-            "etf_spot": etf_spot,
-            "vix": vix_now,
-            "realized_range": realized_rng,
-            "implied_range": implied_rng,
-            "realized_implied_ratio": rir,
-            "basis_level": basis_lvl,
-            "trendiness": trendiness,
-            "term_structure_flag": term_flag,
-            "basis_zscore": basis_z,
-            "regime": regime
-        })
+        # --- Loop through each mapped futures root (ES, MES, etc.) ---
+        for fut in roots:
+            fut_front = get_ohlcv_yf(f"{fut}=F")
+            fut_next = get_ohlcv_yf(f"{fut}Z25.CME")  # adjust contract as needed
 
-        print(f"  [{root}] ({latest_date}) Close={fut_close} | Basis={basis_lvl:.4f} | Trend={trendiness:.2f} | Regime={regime}")
+            if fut_front.empty:
+                print(f"[{etf}] No data for {fut}.")
+                continue
 
-    return pd.DataFrame(out_rows)
+            # --- Basis & z-score ---
+            joined = pd.merge(
+                etf_df[["date", "close"]],
+                fut_front[["date", "close"]],
+                on="date",
+                how="inner",
+                suffixes=("_etf", "_fut"),
+            )
+            joined["basis"] = joined["close_fut"] - joined["close_etf"]
+            basis_level = joined["basis"].iloc[-1]
+            basis_z = compute_basis_zscore(joined["basis"].tail(20))
+
+            # --- Calendar spread (front - next) ---
+            spread, spread_roc = np.nan, np.nan
+            if not fut_next.empty:
+                spread = fut_front["close"].iloc[-1] - fut_next["close"].iloc[-1]
+                if len(fut_front) > 1 and len(fut_next) > 1:
+                    prev = fut_front["close"].iloc[-2] - fut_next["close"].iloc[-2]
+                    spread_roc = spread - prev
+            term_flag = compute_term_structure_flag(spread)
+
+            # --- Volume / OI proxies ---
+            vol_tail = fut_front["volume"].tail(5)
+            volume_rank = vol_tail.iloc[-1] / vol_tail.mean() if vol_tail.mean() > 0 else np.nan
+            oi_delta = vol_tail.diff().iloc[-1] if len(vol_tail) > 1 else np.nan
+
+            # --- Volatility metrics ---
+            realized = compute_realized_range(etf_df)
+            implied = estimate_implied_range_from_vix(spot, vix)
+            rir = compute_realized_implied_ratio(realized, implied)
+
+            o, h, l, c = etf_df.iloc[-1][["open", "high", "low", "close"]]
+            trend = compute_trendiness(o, c, h, l)
+
+            regime = (
+                "expansion-active"
+                if rir > 1.2 and (term_flag == "backwardation" or trend > 0.6)
+                else "compression-stable" if rir < 0.8 and term_flag == "contango"
+                else "neutral"
+            )
+
+            all_results.append({
+                "ticker": etf,
+                "future": fut,
+                "date": latest_date,
+                "spot": spot,
+                "vix": vix,
+                "basis_level": basis_level,
+                "basis_zscore": basis_z,
+                "calendar_spread": spread,
+                "spread_roc": spread_roc,
+                "term_structure_flag": term_flag,
+                "volume_rank": volume_rank,
+                "oi_delta": oi_delta,
+                "rir": rir,
+                "trendiness": trend,
+                "regime": regime,
+            })
+
+            print(
+                f"[{etf}] ({latest_date}) {fut} Close={c:.2f} | Basis={basis_level:.2f} | "
+                f"Z={basis_z:.2f} | Spread={spread:.2f} | Term={term_flag} | "
+                f"Trend={trend:.2f} | Regime={regime}"
+            )
+
+            # --- Save each futures result separately to Dropbox ---
+            df_out = pd.DataFrame([all_results[-1]])
+            local_path = f"{fut.lower()}_futures_model.xlsx"
+            dropbox_path = f"/{etf.lower()}/{fut.lower()}-futures-model/{fut.lower()}_futures_model.xlsx"
+            df_out.to_excel(local_path, index=False)
+            upload_file(local_path, dropbox_path)
+            print(f"[Dropbox] Uploaded → {dropbox_path}")
+
+    return pd.DataFrame(all_results)
 
 
-# =========================
-# Run block
-# =========================
+
+# ------------------ Run ------------------
 if __name__ == "__main__":
     print("=== FUTURES MICROSTRUCTURE MODEL RUN ===")
-    tickers = list(ETF_TO_FUTURES.keys()) or ["SPY"]
-    for ticker in tickers:
-        print(f"\n[{datetime.now(tz=US_EASTERN)}] Running model for {ticker}...")
-        result = run_futures_model(ticker)
-        if result.empty:
-            print(f"  [{ticker}] No data produced.")
-            continue
-        print(f"\n[{ticker}] Results:")
-        print(result[["root", "date", "regime", "realized_implied_ratio",
-                      "basis_level", "trendiness"]])
+    df = run_futures_model()
+    if not df.empty:
+        print("\nSummary:")
+        print(df[["ticker", "future", "date", "regime", "basis_zscore", "trendiness", "rir"]])
     print("\n=== DONE ===")
-f
