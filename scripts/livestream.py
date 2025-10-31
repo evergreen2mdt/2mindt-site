@@ -925,9 +925,56 @@ class LiveStreamDashboard:
                                   yaxis=dict(showgrid=True))
                 st.plotly_chart(fig, use_container_width=True)
 
-            # ----- GAMMA EXPOSURE -----
+            # ----- DELTA EXPOSURE -----
             with col2:
-                st.subheader("Gamma Exposure ")
+                st.subheader("Option Derived Dealer Delta Exposure:\n Net calls and puts")
+                st.markdown(
+                    "<p style='font-size:14px;'>sensitivity of option value to underlying price changes</p>",
+                    unsafe_allow_html=True
+                )
+
+                delta_plot = delta.reset_index().rename(
+                    columns={"index": "strike"})
+
+                # invert sign to reflect dealer side
+                delta_plot["dealer_exposure"] = -delta_plot["delta_exposure"]
+
+                fig = px.bar(
+                    delta_plot,
+                    x="strike",
+                    y="dealer_exposure",
+                    labels={"dealer_exposure": "×1M", "strike": "Strike"},
+                    color_discrete_sequence=["green"]
+                )
+
+                if spot_price is not None:
+                    fig.add_vline(x=spot_price, line_dash="dash",
+                                  line_color="red",
+                                  annotation_text=f"Spot {spot_price:.2f}",
+                                  annotation_position="top",
+                                  annotation=dict(textangle=-90))
+                if today_target is not None and not today_target.empty:
+                    tgt = today_target.iloc[0]["previous_close"]
+                    fig.add_vline(x=tgt, line_dash="dash", line_color="purple",
+                                  annotation_text="Target",
+                                  annotation_position="top",
+                                  annotation=dict(textangle=-90))
+
+                fig.add_scatter(x=[None], y=[None], mode="lines",
+                                line=dict(color="purple", dash="dash"),
+                                name="Target")
+                fig.add_scatter(x=[None], y=[None], mode="lines",
+                                line=dict(color="red", dash="dash"),
+                                name="Spot")
+
+                fig.update_layout(bargap=0.05,
+                                  xaxis=dict(tickmode="linear", dtick=1),
+                                  yaxis=dict(showgrid=True))
+                st.plotly_chart(fig, use_container_width=True)
+
+            # ----- GAMMA EXPOSURE -----
+            with col3:
+                st.subheader("Dealer Gamma Exposure ")
                 st.markdown(
                     "<p style='font-size:14px;'>sensitivity of delta to underlying price changes</p>",
                     unsafe_allow_html=True
@@ -966,48 +1013,12 @@ class LiveStreamDashboard:
                                   yaxis=dict(showgrid=True))
                 st.plotly_chart(fig, use_container_width=True)
 
-            # ----- DELTA EXPOSURE -----
-            with col3:
-                st.subheader("Delta Exposure")
-                st.markdown(
-                    "<p style='font-size:14px;'>sensitivity of option value to underlying price changes</p>",
-                    unsafe_allow_html=True
-                )
 
 
 
 
-                delta_plot = delta.reset_index().rename(
-                    columns={"index": "strike"})
-                fig = px.bar(delta_plot, x="strike", y="delta_exposure",
-                             labels={"delta_exposure": "×1M",
-                                     "strike": "Strike"},
-                             # title="Delta Exposure",
-                             color_discrete_sequence=["green"])
-                if spot_price is not None:
-                    fig.add_vline(x=spot_price, line_dash="dash",
-                                  line_color="red",
-                                  annotation_text=f"Spot {spot_price:.2f}",
-                                  annotation_position="top",
-                                  annotation=dict(textangle=-90))
-                if today_target is not None and not today_target.empty:
-                    tgt = today_target.iloc[0]["previous_close"]
-                    fig.add_vline(x=tgt, line_dash="dash", line_color="purple",
-                                  annotation_text="Target",
-                                  annotation_position="top",
-                                  annotation=dict(textangle=-90))
 
-                fig.add_scatter(x=[None], y=[None], mode="lines",
-                                line=dict(color="purple", dash="dash"),
-                                name="Target")
-                fig.add_scatter(x=[None], y=[None], mode="lines",
-                                line=dict(color="red", dash="dash"),
-                                name="Spot")
 
-                fig.update_layout(bargap=0.05,
-                                  xaxis=dict(tickmode="linear", dtick=1),
-                                  yaxis=dict(showgrid=True))
-                st.plotly_chart(fig, use_container_width=True)
 
             # ----- VEGA EXPOSURE -----
             with col4:

@@ -3,6 +3,8 @@ import sys
 import time
 import math
 from datetime import datetime
+from futures_model import run_futures_model
+
 
 # === Gap Analysis ===
 from gap_functions import get_ib_data, run_gap_analysis_for_contracts
@@ -66,6 +68,13 @@ def main():
             print("Futures volumes updated for all ETFs")
         except Exception as e:
             print(f"Futures volume update failed: {e}")
+
+        # Futures microstructure model
+        try:
+            run_futures_model()
+            print("Futures model updated for all ETFs")
+        except Exception as e:
+            print(f"Futures model update failed: {e}")
 
         # === Sleep until next cadence ===
         loop_secs = time.monotonic() - start
