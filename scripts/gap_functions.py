@@ -719,7 +719,10 @@ def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
         )
 
         # --- Upload main workbook to Dropbox ---
-        dropbox_path = get_dropbox_path(ticker, "gaps", local_filename)
+        # dropbox_path = get_dropbox_path(ticker, "gaps", local_filename)
+        dropbox_path = get_dropbox_path(ticker, "gaps-analysis",
+                                        local_filename)
+
         upload_file(local_filename, dropbox_path)
         print(f"[Dropbox] Uploaded {ticker} gap analysis → {dropbox_path}")
         results[ticker] = dropbox_path

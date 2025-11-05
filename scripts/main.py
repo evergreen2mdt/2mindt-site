@@ -50,17 +50,37 @@ def main():
 
 
         # Step 3: Timebands
+        # Step 3: Timebands (ETFs + Linked Futures)
         try:
-            for ticker in TICKER_MAP:
-                run_timebands_30m(
-                    ticker,
-                    days=20,
-                    include_rth=True,
-                    include_eth=True,
-                )
-            print("Timebands updated for all tickers")
+            from config import ETF_TO_FUTURES
+
+            for etf in TICKER_MAP:
+                # --- Run ETF timebands ---
+                run_timebands_30m(etf, days=20, include_rth=True,
+                                  include_eth=True)
+
+                # --- Then run all mapped futures ---
+                fut_list = ETF_TO_FUTURES.get(etf, [])
+                for fut in fut_list:
+                    print(f"[map] {etf} → running timebands for {fut}")
+                    run_timebands_30m(fut, days=20, include_rth=True,
+                                      include_eth=True)
+
+            print("Timebands updated for all ETFs and futures")
         except Exception as e:
             print(f"Timebands update failed: {e}")
+
+        # try:
+        #     for ticker in TICKER_MAP:
+        #         run_timebands_30m(
+        #             ticker,
+        #             days=20,
+        #             include_rth=True,
+        #             include_eth=True,
+        #         )
+        #     print("Timebands updated for all tickers")
+        # except Exception as e:
+        #     print(f"Timebands update failed: {e}")
 
         # Futures volumes
         try:

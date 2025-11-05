@@ -42,27 +42,65 @@ DEFAULT_START_DATE = "2003-01-01"
 
 # === Dropbox Path Helpers ===
 DROPBOX_ROOT = ""
-
 def get_dropbox_path(ticker: str, category: str, filename: str | None = None) -> str:
     """
     Return the full Dropbox path for a given ticker/category, optionally appending a filename.
+    Category must be one of the literal subfolder names found in your Dropbox.
     """
     t = ticker.lower()
     folder_map = {
-        "options": f"{DROPBOX_ROOT}/{t}/{t}-options-data",
-        "gaps": f"{DROPBOX_ROOT}/{t}/{t}-gaps-analysis",
-        "timebands": f"{DROPBOX_ROOT}/{t}/{t}-timebands",
-        "futures": f"{DROPBOX_ROOT}/{t}/{t}-futures-volume",
-        "red-green": f"{DROPBOX_ROOT}/{t}/{t}-red-green",  # <-- added
+        "options": f"/{t}/spy-options",
+        "gaps": f"/{t}/spy-gaps-analysis",
+        "timebands": f"/{t}/spy-timebands",
+        "es-timebands": f"/{t}/es-timebands",
+        "mes-timebands": f"/{t}/mes-timebands",
+        "red-green": f"/{t}/spy-red-green",
+        "es-futures-model": f"/{t}/es-futures-model",
+        "mes-futures-model": f"/{t}/mes-futures-model",
     }
-
     if category not in folder_map:
         raise ValueError(f"Unknown category: {category}")
-
     base = folder_map[category]
     return f"{base}/{filename}" if filename else base
+#
+# def get_dropbox_path(ticker: str, category: str, filename: str | None = None) -> str:
+#     """
+#     Return the full Dropbox path for a given ticker/category, optionally appending a filename.
+#     """
+#     t = ticker.lower()
+#     folder_map = {
+#         "options": f"{DROPBOX_ROOT}/{t}-options-data",
+#         "gaps": f"{DROPBOX_ROOT}/{t}-gaps-analysis",
+#         "timebands": f"{DROPBOX_ROOT}/{t}-timebands",
+#         "futures": f"{DROPBOX_ROOT}/{t}-futures-volume",
+#         "red-green": f"{DROPBOX_ROOT}/{t}-red-green",  # <-- added
+#     }
+#     print(folder_map)
+#     if category not in folder_map:
+#         raise ValueError(f"Unknown category: {category}")
+#
+#     base = folder_map[category]
+#     return f"{base}/{filename}" if filename else base
 
-
+# def get_dropbox_path(ticker: str, category: str, filename: str) -> str:
+#     """
+#     Corrected Dropbox path builder.
+#     Ensures futures (ES, MES) are nested under their parent ETF directory (SPY).
+#     """
+#     ETF_TO_FUTURES = {"SPY": ["ES", "MES"], "QQQ": ["NQ", "MNQ"], "IWM": ["RTY", "M2K"]}
+#
+#     # Route futures under their ETF folder
+#     for etf, futs in ETF_TO_FUTURES.items():
+#         if ticker.upper() in futs:
+#             folder = f"/{etf.lower()}/{ticker.lower()}-{category.lower()}"
+#             break
+#     else:
+#         folder = f"/{ticker.lower()}/{ticker.lower()}-{category.lower()}"
+#
+#     if not filename.lower().endswith(".xlsx"):
+#         filename = f"{filename}.xlsx"
+#     return os.path.join(folder, filename).replace("\\", "/")
+#
 
 
 

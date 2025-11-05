@@ -29,6 +29,10 @@ from dropbox_utils import (
 )
 US_EASTERN = ZoneInfo("America/New_York")
 
+# ADD near the other globals (right after US_EASTERN)
+def futures_timeband_path(ticker: str, sym: str) -> str:
+    """Canonical Dropbox path for a futures root's timebands file."""
+    return f"/{ticker.lower()}/{sym.lower()}-timebands/{sym.lower()}_timeband_volume.xlsx"
 
 st.cache_data = lambda *a, **k: (lambda f: f)
 
@@ -68,7 +72,7 @@ def highlight_z(val):
 
 def load_futures_timebands(ticker: str):
     """Load and merge all mapped futures roots (e.g., SPY → ES,MES)."""
-    roots = ETF_TO_FUTURES.get(ticker, [])
+    roots = ETF_TO_FUTURES.get(ticker.upper(), [])
     if not roots:
         return None
 
@@ -76,7 +80,8 @@ def load_futures_timebands(ticker: str):
     frames = []
 
     for sym in roots:
-        path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+        path = futures_timeband_path(ticker, sym)
+
         try:
             df = dbx_read_excel(path, sheet_name="Timebands").copy()
 
@@ -118,23 +123,7 @@ def load_futures_timebands(ticker: str):
 
 
 
-def compute_relative_flow(current_volume: float,
-                          elapsed_minutes: float,
-                          avg_20d_volume: float,
-                          bar_minutes: int = 30) -> float:
-    """
-    Compute real-time relative flow.
-    current_volume : volume so far in this bar
-    elapsed_minutes : minutes completed in the bar
-    avg_20d_volume : 20-day average total volume for this band
-    bar_minutes : bar length in minutes (default 30)
-    """
-    if elapsed_minutes <= 0 or avg_20d_volume <= 0:
-        return float("nan")
-    # Current flow rate vs. historical flow rate
-    current_rate = current_volume / elapsed_minutes
-    avg_rate = avg_20d_volume / bar_minutes
-    return current_rate / avg_rate
+
 
 def read_excel_from_dropbox(dbx, dropbox_path: str, sheet_name: str):
     """Download Excel sheet from Dropbox path to a BytesIO buffer."""
@@ -187,7 +176,7 @@ def weighted_pin(df_pins, spot, window_pct=0.05, window_abs=None, lam=3.0, min_s
 def get_paths(ticker: str):
     t = ticker.lower()
     return {
-        "options_dir": f"/{t}/{t}-options-data/",
+        "options_dir": f"/{t}/{t}-options/",
         "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
         "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
     }
@@ -208,7 +197,7 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
         st.info("No futures data to display.")
         return
 
-    fut_syms = ETF_TO_FUTURES.get(ticker, [])
+    fut_syms = ETF_TO_FUTURES.get(ticker.upper(), [])
     if not fut_syms:
         st.info("No futures mappings found.")
         return
@@ -217,7 +206,8 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
     for sym in fut_syms:
         try:
             # --- fixed file path identical to ETF timebands ---
-            path = f"/{ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
+            path = futures_timeband_path(ticker, sym)
+
             print(f"[DEBUG] Attempting to load futures file: {path}")
 
             tmp = dbx_read_excel(path, sheet_name="Timebands")
@@ -415,12 +405,11 @@ def _load_spy_timebands_ratio(ticker: str):
 @st.cache_data(ttl=60)
 def _load_futures_est_vol_close(ticker: str):
     """Average est_vol_at_close across mapped futures."""
-    roots = ETF_TO_FUTURES.get(ticker, [])
+    roots = ETF_TO_FUTURES.get(ticker.upper(), [])
     vals = []
     for sym in roots:
         try:
-            folder = f"/{ticker.lower()}/{sym.lower()}-timebands-volume"
-            path = f"{folder}/{sym.lower()}_timeband_volume.xlsx"
+            path = futures_timeband_path(ticker, sym)
             tb = dbx_read_excel(path, sheet_name="Timebands")
             tb["date"] = pd.to_datetime(tb.get("date"), errors="coerce").dt.date
             tb = tb[tb["date"] == _today()]
@@ -821,6 +810,9 @@ class LiveStreamDashboard:
             st.error(f"Narratives failed: {e}")
 
     def render_charts(self, today_target):
+        # print(">>> ENTERED render_charts <<<")
+        # st.write(">>> ENTERED render_charts <<<")
+
         try:
             dropbox_file = self.snapshot_path
             df_mc = read_excel_from_dropbox(self.dbx, dropbox_file,
@@ -834,12 +826,30 @@ class LiveStreamDashboard:
             df_raw = read_excel_from_dropbox(self.dbx, dropbox_file,
                                              "raw options")
 
+            # print(">>> df_pin shape:", df_mc.shape)
+            # st.write(">>> df_pin preview:", df_mc.head())
+            #
+            # print(">>> df_pin shape:", df_final.shape)
+            # st.write(">>> df_pin preview:", df_final.head())
+            #
+            # print(">>> df_pin shape:", df_pin.shape)
+            # st.write(">>> df_pin preview:", df_pin.head())
+            #
+            # print(">>> df_pin shape:", df_greeks.shape)
+            # st.write(">>> df_pin preview:", df_greeks.head())
+            #
+            # print(">>> df_pin shape:", df_raw.shape)
+            # st.write(">>> df_pin preview:", df_raw.head())
+
             spot_price = df_raw["spot"].mode().iloc[0]
 
             strikes = sorted(df_pin["strike"].unique())
             pin_df = df_pin.groupby("strike")[
                 "pinning_strength"].max().reset_index().sort_values("strike")
             pin_df["pinning_strength_k"] = pin_df["pinning_strength"] / 1000
+            # st.write("Raw df_pin from Excel:", df_pin)
+            # st.write("Grouped pin_df after processing:", pin_df)
+            # st.write("pin_df dtypes:", pin_df.dtypes)
 
             gamma = df_greeks.groupby("strike")[
                 ["call_gamma_exposure", "put_gamma_exposure"]].sum()
@@ -861,69 +871,131 @@ class LiveStreamDashboard:
 
             # ----- PINNING STRENGTH -----
             with col1:
-                st.subheader("Pinning Strength")
-                st.markdown(
-                    "<p style='font-size:14px;'>aggregate intensity of dealer positioning</p>",
-                    unsafe_allow_html=True
-                )
-                pin_plot = pin_df.copy()
-                fig = px.bar(
-                    pin_plot,
-                    x="strike", y="pinning_strength_k",
-                    labels={"pinning_strength_k": "×1k", "strike": "Strike"},
-                    # title="Pinning Strength",
-                    color_discrete_sequence=["#FF1493"]
-                )
+                # Defensive: Only plot if there’s data and required columns
+                if not pin_df.empty and "strike" in pin_df.columns and "pinning_strength_k" in pin_df.columns:
+                    st.subheader("Pinning Strength")
+                    st.markdown(
+                        "<p style='font-size:14px;'>aggregate intensity of dealer positioning</p>",
+                        unsafe_allow_html=True
+                    )
+                    pin_plot = pin_df.copy()
+                    fig = px.bar(
+                        pin_plot,
+                        x="strike", y="pinning_strength_k",
+                        labels={"pinning_strength_k": "×1k",
+                                "strike": "Strike"},
+                        # title="Pinning Strength",
+                        color_discrete_sequence=["#FF1493"]
+                    )
 
-                wp = weighted_pin(pin_df.rename(
-                    columns={"pinning_strength_k": "pin_strength"}),
-                                  spot_price, window_abs=10, lam=3.0)
-                if wp is not None:
-                    fig.add_vline(x=wp, line_dash="dash", line_color="orange")
-                                  # annotation_text=f"Weighted Pin {wp:.2f}",
-                                  # annotation_position="top",
-                                  # annotation=dict(textangle=-90))
-                if spot_price is not None:
-                    fig.add_vline(x=spot_price, line_dash="dash")
-                    #               line_color="red",
-                    #               annotation_text=f"Spot {spot_price:.2f}",
-                    #               annotation_position="top",
-                    #               annotation=dict(textangle=-90))
-                if today_target is not None and not today_target.empty:
-                    tgt = today_target.iloc[0]["previous_close"]
-                    fig.add_vline(x=tgt, line_dash="dash", line_color="purple")
-                                  # annotation_text="Target",
-                                  # annotation_position="top",
-                                  # annotation=dict(textangle=-90))
+                    wp = weighted_pin(pin_df.rename(
+                        columns={"pinning_strength_k": "pin_strength"}),
+                        spot_price, window_abs=10, lam=3.0)
+                    if wp is not None:
+                        fig.add_vline(x=wp, line_dash="dash",
+                                      line_color="orange")
+                    if spot_price is not None:
+                        fig.add_vline(x=spot_price, line_dash="dash")
+                    if today_target is not None and not today_target.empty:
+                        tgt = today_target.iloc[0]["previous_close"]
+                        fig.add_vline(x=tgt, line_dash="dash",
+                                      line_color="purple")
 
-
-                # --- legend for vlines with numeric values ---
-                fig.add_scatter(
-                    x=[None], y=[None],
-                    mode="lines",
-                    line=dict(color="purple", dash="dash"),
-                    name=f"Target ({tgt:.2f})"
-                )
-                fig.add_scatter(
-                    x=[None], y=[None],
-                    mode="lines",
-                    line=dict(color="red", dash="dash"),
-                    name=f"Spot ({spot_price:.2f})"
-                )
-                if wp is not None:
+                    # --- legend for vlines with numeric values ---
                     fig.add_scatter(
                         x=[None], y=[None],
                         mode="lines",
-                        line=dict(color="orange", dash="dash"),
-                        name=f"Weighted Pin ({wp:.2f})"
+                        line=dict(color="purple", dash="dash"),
+                        name=f"Target ({tgt:.2f})"
                     )
+                    fig.add_scatter(
+                        x=[None], y=[None],
+                        mode="lines",
+                        line=dict(color="red", dash="dash"),
+                        name=f"Spot ({spot_price:.2f})"
+                    )
+                    if wp is not None:
+                        fig.add_scatter(
+                            x=[None], y=[None],
+                            mode="lines",
+                            line=dict(color="orange", dash="dash"),
+                            name=f"Weighted Pin ({wp:.2f})"
+                        )
 
-                fig.update_layout(bargap=0.05,
-                                  xaxis=dict(tickmode="linear",
-                                             tick0=pin_plot["strike"].min(),
-                                             dtick=1),
-                                  yaxis=dict(showgrid=True))
-                st.plotly_chart(fig, use_container_width=True)
+                    fig.update_layout(bargap=0.05,
+                                      xaxis=dict(tickmode="linear",
+                                                 tick0=pin_plot["strike"].min(),
+                                                 dtick=1),
+                                      yaxis=dict(showgrid=True))
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.error("No valid pinning metrics data available.")
+                    st.write("Pinning metrics preview:", pin_df)
+
+            # with col1:
+            #     st.subheader("Pinning Strength")
+            #     st.markdown(
+            #         "<p style='font-size:14px;'>aggregate intensity of dealer positioning</p>",
+            #         unsafe_allow_html=True
+            #     )
+            #     pin_plot = pin_df.copy()
+            #     fig = px.bar(
+            #         pin_plot,
+            #         x="strike", y="pinning_strength_k",
+            #         labels={"pinning_strength_k": "×1k", "strike": "Strike"},
+            #         # title="Pinning Strength",
+            #         color_discrete_sequence=["#FF1493"]
+            #     )
+            #
+            #     wp = weighted_pin(pin_df.rename(
+            #         columns={"pinning_strength_k": "pin_strength"}),
+            #                       spot_price, window_abs=10, lam=3.0)
+            #     if wp is not None:
+            #         fig.add_vline(x=wp, line_dash="dash", line_color="orange")
+            #                       # annotation_text=f"Weighted Pin {wp:.2f}",
+            #                       # annotation_position="top",
+            #                       # annotation=dict(textangle=-90))
+            #     if spot_price is not None:
+            #         fig.add_vline(x=spot_price, line_dash="dash")
+            #         #               line_color="red",
+            #         #               annotation_text=f"Spot {spot_price:.2f}",
+            #         #               annotation_position="top",
+            #         #               annotation=dict(textangle=-90))
+            #     if today_target is not None and not today_target.empty:
+            #         tgt = today_target.iloc[0]["previous_close"]
+            #         fig.add_vline(x=tgt, line_dash="dash", line_color="purple")
+            #                       # annotation_text="Target",
+            #                       # annotation_position="top",
+            #                       # annotation=dict(textangle=-90))
+            #
+            #
+            #     # --- legend for vlines with numeric values ---
+            #     fig.add_scatter(
+            #         x=[None], y=[None],
+            #         mode="lines",
+            #         line=dict(color="purple", dash="dash"),
+            #         name=f"Target ({tgt:.2f})"
+            #     )
+            #     fig.add_scatter(
+            #         x=[None], y=[None],
+            #         mode="lines",
+            #         line=dict(color="red", dash="dash"),
+            #         name=f"Spot ({spot_price:.2f})"
+            #     )
+            #     if wp is not None:
+            #         fig.add_scatter(
+            #             x=[None], y=[None],
+            #             mode="lines",
+            #             line=dict(color="orange", dash="dash"),
+            #             name=f"Weighted Pin ({wp:.2f})"
+            #         )
+            #
+            #     fig.update_layout(bargap=0.05,
+            #                       xaxis=dict(tickmode="linear",
+            #                                  tick0=pin_plot["strike"].min(),
+            #                                  dtick=1),
+            #                       yaxis=dict(showgrid=True))
+            #     st.plotly_chart(fig, use_container_width=True)
 
             # ----- DELTA EXPOSURE -----
             with col2:
@@ -1266,22 +1338,33 @@ class LiveStreamDashboard:
         except Exception:
             pass
 
-
-
     def render_timebands(self):
+        """Render ETF + Futures timebands tables and charts."""
         try:
+            # === Load ETF timebands ===
             self.paths["timebands_file"] = get_dropbox_path(
-                self.ticker,
-                "timebands",
-                f"{self.ticker.lower()}_timeband_volume.xlsx",
+                self.ticker, "timebands",
+                f"{self.ticker.lower()}_timeband_volume.xlsx"
             )
-            tb = dbx_read_excel(self.paths["timebands_file"], sheet_name="Timebands")
+            tb = dbx_read_excel(self.paths["timebands_file"],
+                                sheet_name="Timebands")
+
+            # --- Backward compatibility ---
+            if "zscore_live" in tb.columns and "projected_zscore" not in tb.columns:
+                tb.rename(columns={"zscore_live": "projected_zscore"},
+                          inplace=True)
+
+            tb.drop(
+                columns=["zscore_20d", "sigma_flag", "average", "barCount",
+                         "time"],
+                inplace=True,
+                errors="ignore",
+            )
             tb["date"] = pd.to_datetime(tb["date"], errors="coerce")
             tb = tb[tb["date"].notna()].copy()
 
             dates = sorted(tb["date"].dt.date.unique())
             recent_dates = dates[-3:] if len(dates) >= 3 else dates
-
             df_plot = (
                 tb[tb["date"].dt.date.isin(recent_dates)]
                 .copy()
@@ -1292,17 +1375,15 @@ class LiveStreamDashboard:
                 st.info("No timebands available.")
                 return
 
-            # ===== Top chart
+            # === ETF Chart ===
             fig, ax1 = plt.subplots(figsize=(14, 5))
             x_vals = np.arange(len(df_plot))
             y_ratio = pd.to_numeric(df_plot["ratio_to_avg_20d"],
-                                    errors="coerce").fillna(0).values
-
-            # Main bar plot
+                                    errors="coerce").fillna(0)
             ax1.bar(x_vals, y_ratio, alpha=0.6, label="Vol / 20d Avg")
-            ax1.axhline(1.0, color="black", linestyle="--", linewidth=1, label="20d avg")
+            ax1.axhline(1.0, color="black", linestyle="--", linewidth=1,
+                        label="20d avg")
 
-            # --- Add ±1σ, ±2σ, ±3σ reference lines based on 20d stdev ---
             if "avg_20d" in df_plot.columns and "stdev_20d" in df_plot.columns:
                 mean_val = df_plot["avg_20d"].mean()
                 std_val = df_plot["stdev_20d"].mean()
@@ -1311,14 +1392,9 @@ class LiveStreamDashboard:
                     for n, color in [(1, "orange"), (2, "red"), (3, "darkred")]:
                         ax1.axhline(1.0 + n * sigma_ratio, color=color,
                                     linestyle="--", label=f"+{n}σ")
-                    # for n, color in [(1, "lightblue"), (2, "blue"),
-                    #                  (3, "navy")]:
-                    #     ax1.axhline(1.0 - n * sigma_ratio, color=color,
-                    #                 linestyle="--", label=f"−{n}σ")
 
             ax1.set_ylabel("Volume Ratio")
             ax1.set_xticks(x_vals)
-
             xticks, prev_date = [], None
             for d, b in zip(df_plot["date"], df_plot["band"]):
                 cd = d.date()
@@ -1329,27 +1405,27 @@ class LiveStreamDashboard:
             ax1.grid(True, linestyle="--", alpha=0.6)
             ax1.legend(fontsize=8, loc="upper right")
 
-            # Shade ETH sessions
             if "session" in df_plot.columns:
                 for i, sess in enumerate(df_plot["session"]):
                     if sess == "ETH":
                         ax1.axvspan(i - 0.5, i + 0.5, color="grey", alpha=0.2)
 
-            # Overlay candlesticks
             ax2 = ax1.twinx()
-            candle_width = 0.6
             for i, r in df_plot.iterrows():
-                o, h, l, c = r["open"], r["high"], r["low"], r["close"]
+                o, h, l, c = r.get("open"), r.get("high"), r.get("low"), r.get(
+                    "close")
+                if pd.isna(o) or pd.isna(c):
+                    continue
                 color = "g" if c >= o else "r"
                 ax2.vlines(i, l, h, color=color, linewidth=1)
-                ax2.add_patch(plt.Rectangle((i - candle_width / 2, min(o, c)),
-                                            candle_width, abs(c - o),
-                                            facecolor=color, edgecolor=color))
+                ax2.add_patch(
+                    plt.Rectangle((i - 0.3, min(o, c)), 0.6, abs(c - o),
+                                  facecolor=color, edgecolor=color))
             ax2.set_ylabel(f"{self.ticker} Price")
             st.pyplot(fig)
             plt.close(fig)
 
-            # ===== Preview table (separate frame)
+            # === ETF Table ===
             df_prev = (
                 tb[tb["date"].dt.date.isin(recent_dates)]
                 .copy()
@@ -1357,190 +1433,100 @@ class LiveStreamDashboard:
                 .reset_index(drop=True)
             )
             df_prev["date"] = pd.to_datetime(df_prev["date"]).dt.date
-
-            tz = ZoneInfo("America/New_York")
-            now = datetime.now(tz)
-            df_prev["est_vol_at_close"] = df_prev["ratio_to_avg_20d"]
-
-
-
-            # Optional: filter to today's data only
-            today = pd.Timestamp.now().date()
-            if "date" in df_prev.columns:
-                df_today = df_prev[df_prev["date"] == today]
-            else:
-                df_today = df_prev.copy()
-
-            # include zscore_20d directly in the per-futures tables
-            if "zscore_20d" in df_prev.columns:
-                keep_cols = [
-                    "date", "timestamp", "generated_at", "granularity",
-                    "session", "band", "Total_barCount", "Total_volume",
-                    "avg_20d", "stdev_20d", "zscore_20d",
-                    "sigma_flag", "ratio_to_avg_20d", "est_vol_at_close"
-                ]
-            else:
-                keep_cols = [
-                    "date", "timestamp", "generated_at", "granularity",
-                    "session", "band", "Total_barCount", "Total_volume",
-                    "avg_20d", "stdev_20d", "ratio_to_avg_20d",
-                    "est_vol_at_close"
-                ]
-
-            def _dt_on_day(d, hhmm):
-                hh, mm = map(int, str(hhmm).split(":"))
-                return datetime(d.year, d.month, d.day, hh, mm, tzinfo=tz)
-
-            for i, r in df_prev.iterrows():
-                start_dt = _dt_on_day(pd.to_datetime(r["date"]).to_pydatetime(),
-                                      r["start"])
-                end_dt = _dt_on_day(pd.to_datetime(r["date"]).to_pydatetime(),
-                                    r["end"])
-                if start_dt <= now < end_dt:
-                    elapsed = max(0.01, (now - start_dt).total_seconds() / 60)
-                    df_prev.at[i, "est_vol_at_close"] = compute_relative_flow(
-                        r["volume"], elapsed, r["avg_20d"])
-                    break
-
-            keep_cols = [
-                "date", "timestamp", "generated_at", "granularity",
-                "session", "band", "Total_barCount", "Total_volume",
-                "avg_20d", "stdev_20d", "zscore_20d", "sigma_flag",
-                "ratio_to_avg_20d", "est_vol_at_close"
+            desired_cols = [
+                "date", "band", "session", "volume",
+                "avg_20d", "stdev_20d", "ratio_to_avg_20d",
+                "est_vol_at_close", "projected_zscore"
             ]
+            df_prev = df_prev[[c for c in desired_cols if c in df_prev.columns]]
+            for col in ["volume", "avg_20d", "stdev_20d", "ratio_to_avg_20d",
+                        "est_vol_at_close", "projected_zscore"]:
+                if col in df_prev.columns:
+                    df_prev[col] = pd.to_numeric(df_prev[col], errors="coerce")
 
-            print(df_prev.dtypes)
-            print(df_prev.columns)
-
-            df_prev = df_prev[[c for c in keep_cols if c in df_prev.columns]]
-            df_prev = df_prev.sort_values(["date", "timestamp"],
-                                          ascending=[False, False])
-
-            st.subheader("Timebands")
-
-
-            numeric_cols = [
-                "Total_barCount", "Total_volume", "avg_20d",
-                "stdev_20d", "zscore_20d", "ratio_to_avg_20d",
-                "est_vol_at_close"
-            ]
-
-            df_display = df_prev.copy()
-            for col in numeric_cols:
-                if col in df_display.columns:
-                    df_display[col] = pd.to_numeric(df_display[col],
-                                                    errors="coerce")
-
+            st.subheader("ETF Timebands")
+            df_style = (
+                df_prev.style.applymap(highlight_z, subset=["projected_zscore"])
+                if "projected_zscore" in df_prev.columns else df_prev.style
+            )
             st.dataframe(
-                df_display.style
-                .applymap(highlight_z, subset=["zscore_20d"])
-                .format({
-                    "Total_barCount": "{:,.0f}",
-                    "Total_volume": "{:,.0f}",
+                df_style.format({
+                    "volume": "{:,.0f}",
                     "avg_20d": "{:,.0f}",
                     "stdev_20d": "{:,.0f}",
-                    "zscore_20d": "{:.3f}",
                     "ratio_to_avg_20d": "{:.3f}",
                     "est_vol_at_close": "{:.3f}",
+                    "projected_zscore": "{:.3f}",
                 }),
                 hide_index=True,
-                width="stretch"
+                width="stretch",
             )
 
-            # ===== Futures Volume Comparison (Side-by-Side)
-            try:
-                fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
-                if fut_syms:
-                    fut_frames = []
-                    for sym in fut_syms:
-                        path = f"/{self.ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
-                        fdf = dbx_read_excel(path, sheet_name="Timebands")
-                        if fdf is not None and not fdf.empty:
-                            fut_frames.append(fdf)
-                    if fut_frames:
-                        fut_df = pd.concat(fut_frames, ignore_index=True)
-                        render_futures_volume_chart(fut_df, self.ticker)
-                    else:
-                        st.info("No futures volume data available.")
-            except Exception as e:
-                st.warning(f"Futures volume chart skipped: {e}")
+            # === FUTURES TIMEBANDS (ES, MES, etc.) ===
+            fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
+            fut_frames = []
+            for sym in fut_syms:
+                path = futures_timeband_path(self.ticker, sym)
+                fdf = dbx_read_excel(path, sheet_name="Timebands")
+                if fdf is None or fdf.empty:
+                    continue
+
+                fdf["Root"] = sym.upper()
+                fdf["date"] = pd.to_datetime(fdf["date"], errors="coerce")
+                fdf = fdf[fdf["date"].notna()].copy()
+
+                # extract date-only view for display
+                fdf["date_only"] = fdf["date"].dt.date
+
+                if "est_vol_at_close" not in fdf.columns:
+                    fdf["est_vol_at_close"] = np.nan
+                if "projected_zscore" not in fdf.columns:
+                    fdf["projected_zscore"] = np.nan
+
+                if len(dates) > 0:
+                    fdf = fdf[fdf["date"].dt.date.isin(recent_dates)].copy()
+
+                fdf = fdf.sort_values(["date", "band"],
+                                      ascending=[False, False]).reset_index(
+                    drop=True)
+
+                st.subheader(f"{sym.upper()} Timebands")
+                cols = [
+                    "date_only", "band", "session", "volume",
+                    "avg_20d", "stdev_20d", "ratio_to_avg_20d",
+                    "est_vol_at_close", "projected_zscore"
+                ]
+                keep = [c for c in cols if c in fdf.columns]
+                st.dataframe(
+                    fdf[keep].style.format({
+                        "volume": "{:,.0f}",
+                        "avg_20d": "{:,.0f}",
+                        "stdev_20d": "{:,.0f}",
+                        "ratio_to_avg_20d": "{:.3f}",
+                        "est_vol_at_close": "{:.3f}",
+                        "projected_zscore": "{:.3f}",
+                    }),
+                    hide_index=True,
+                    width="stretch",
+                )
+                fut_frames.append(fdf)
+
+            if fut_frames:
+                fut_df_all = pd.concat(fut_frames, ignore_index=True)
+                render_futures_volume_chart(fut_df_all, self.ticker)
 
         except Exception as e:
             st.error(f"Timebands render failed: {e}")
 
-        # ===== Futures Timebands Table (aggregate only, no OHLC or per-contract columns) =====
-        # ===== Futures Timebands: Separate Tables for ES and MES =====
-        try:
-            fut_syms = ETF_TO_FUTURES.get(self.ticker, [])
-            if fut_syms:
-                for sym in fut_syms:
-                    path = f"/{self.ticker.lower()}/{sym.lower()}-timebands-volume/{sym.lower()}_timeband_volume.xlsx"
-                    fdf = dbx_read_excel(path, sheet_name="Timebands")
-
-                    if fdf is None or fdf.empty:
-                        st.info(f"No {sym} timeband data available.")
-                        continue
-
-                    fdf["date"] = pd.to_datetime(fdf.get("date"),
-                                                 errors="coerce")
-                    fdf = fdf[fdf["date"].notna()].copy()
-                    fdf["date"] = fdf["date"].dt.date
-
-                    # Keep only aggregate columns (no OHLC, no per-contract)
-                    keep_cols = [
-                        "date", "timestamp", "generated_at", "granularity",
-                        "session", "band", "Total_barCount", "Total_volume",
-                        "avg_20d", "stdev_20d", "zscore_20d", "sigma_flag", "ratio_to_avg_20d", "est_vol_at_close"
-                    ]
-                    fdf = fdf[[c for c in keep_cols if c in fdf.columns]]
-                    today = pd.Timestamp.now(
-                        tz=ZoneInfo("America/New_York")).date()
-                    fdf = fdf[fdf["date"] == today]
-
-                    fdf = fdf.sort_values(["date", "timestamp"],
-                                          ascending=[False, False])
-
-                    st.subheader(f"{sym} Futures Timebands")
-
-                    numeric_cols = [
-                        "Total_barCount", "Total_volume", "avg_20d",
-                        "stdev_20d", "zscore_20d", "ratio_to_avg_20d",
-                        "est_vol_at_close"
-                    ]
-
-                    fdf_fmt = fdf.copy()
-                    for col in numeric_cols:
-                        if col in fdf_fmt.columns:
-                            fdf_fmt[col] = pd.to_numeric(fdf_fmt[col],
-                                                         errors="coerce")
-
-                    st.dataframe(
-                        fdf_fmt.style
-                        .applymap(highlight_z, subset=["zscore_20d"])
-                        .format({
-                            "Total_barCount": "{:,.0f}",
-                            "Total_volume": "{:,.0f}",
-                            "avg_20d": "{:,.0f}",
-                            "stdev_20d": "{:,.0f}",
-                            "zscore_20d": "{:.3f}",
-                            "ratio_to_avg_20d": "{:.3f}",
-                            "est_vol_at_close": "{:.3f}",
-                        }),
-                        hide_index=True,
-                        width="stretch"
-                    )
-
-
-            else:
-                st.info("No futures mappings found for this ticker.")
-        except Exception as e:
-            st.warning(f"Futures timebands table skipped: {e}")
 
     def render_all(self):
+        print(">>> render_all starts <<<")
+
         self.snapshot_path = self._get_latest_snapshot()
         st.write("Using snapshot file:", self.snapshot_path)  # ← move here
         self.render_header()
         today_target = self.render_gap_targets()
+        print(f">>> today_target: {today_target}")
         if today_target is not None:
             self.render_narratives(today_target)
             self.render_charts(today_target)
@@ -1601,132 +1587,132 @@ for tab, ticker in zip(tabs, list(TICKER_MAP.keys()) + ["Glossary"]):
             st.title("Glossary")
             st.markdown("""
             ### Index ETFs and Futures
-            - **SPY → ES (E-mini S&P 500)** – 1 SPY pt ≈ 10 ES pts. 1 ES pt = 4 ticks = $12.50. 1 SPY pt ≈ $500.  
-              [CME contract specs](https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.contractSpecs.html)  
-            - **QQQ → NQ (E-mini Nasdaq-100)** – 1 QQQ pt ≈ 40 NQ pts. 1 NQ pt = 4 ticks = $5. 1 QQQ pt ≈ $800.  
-              [CME contract specs](https://www.cmegroup.com/markets/equities/nasdaq/nasdaq-100.contractSpecs.html)  
-            - **DIA → YM (E-mini Dow)** – 1 DIA pt ≈ 100 YM pts. 1 YM pt = 1 tick = $5. 1 DIA pt ≈ $500.  
-              [CME contract specs](https://www.cmegroup.com/markets/equities/dow-jones/dow-jones-industrial-average.contractSpecs.html)  
-            - **IWM → RTY (E-mini Russell 2000)** – 1 IWM pt ≈ 10 RTY pts. 1 RTY pt = 10 ticks = $50. 1 IWM pt ≈ $500.  
-              [CME contract specs](https://www.cmegroup.com/markets/equities/russell/russell-2000.contractSpecs.html)  
+            - **SPY → ES (E-mini S&P 500)** – 1 SPY pt ≈ 10 ES pts. 1 ES pt = 4 ticks = $12.50. 1 SPY pt ≈ $500.
+              [CME contract specs](https://www.cmegroup.com/markets/equities/sp/e-mini-sandp500.contractSpecs.html)
+            - **QQQ → NQ (E-mini Nasdaq-100)** – 1 QQQ pt ≈ 40 NQ pts. 1 NQ pt = 4 ticks = $5. 1 QQQ pt ≈ $800.
+              [CME contract specs](https://www.cmegroup.com/markets/equities/nasdaq/nasdaq-100.contractSpecs.html)
+            - **DIA → YM (E-mini Dow)** – 1 DIA pt ≈ 100 YM pts. 1 YM pt = 1 tick = $5. 1 DIA pt ≈ $500.
+              [CME contract specs](https://www.cmegroup.com/markets/equities/dow-jones/dow-jones-industrial-average.contractSpecs.html)
+            - **IWM → RTY (E-mini Russell 2000)** – 1 IWM pt ≈ 10 RTY pts. 1 RTY pt = 10 ticks = $50. 1 IWM pt ≈ $500.
+              [CME contract specs](https://www.cmegroup.com/markets/equities/russell/russell-2000.contractSpecs.html)
 
             ### Futures Basics
-            - **Futures Contract** – Standardized agreement to buy/sell underlying at a future date. [CME](https://www.cmegroup.com/education/courses/introduction-to-futures/what-are-futures.html)  
-            - **Notional Value** – *Contract Multiplier × Futures Price*. Example: ES multiplier = $50; at 5,000 index level, notional = $250,000.  
-            - **Tick** – Minimum price fluctuation for a futures contract.  
-            - **Tick Value** – Dollar value of one tick. Example: ES tick = 0.25 pts = $12.50.  
-            - **Leverage** – Large notional exposure for small margin.  
-            - **Initial Margin** – Amount required to open a position. [CME](https://www.cmegroup.com/clearing/margins/)  
-            - **Maintenance Margin** – Minimum equity required to keep a position open.  
-            - **Intraday Margin** – Lower broker-set requirement for day-only positions. [NinjaTrader](https://ninjatrader.com/futures/blogs/understanding-margin-in-futures-trading/?utm_source=chatgpt.com)  
-            - **Expiration** – Date contract ceases trading.  
-            - **Settlement** – How position closes: **Cash-settled** (e.g., ES, NQ, YM, RTY) or **Physical** (commodity delivery).  
-            - **Roll** – Close near-term contract, open further out.  
-            - **Hedger vs. Speculator** – Hedgers reduce risk, speculators trade for profit.  
+            - **Futures Contract** – Standardized agreement to buy/sell underlying at a future date. [CME](https://www.cmegroup.com/education/courses/introduction-to-futures/what-are-futures.html)
+            - **Notional Value** – *Contract Multiplier × Futures Price*. Example: ES multiplier = $50; at 5,000 index level, notional = $250,000.
+            - **Tick** – Minimum price fluctuation for a futures contract.
+            - **Tick Value** – Dollar value of one tick. Example: ES tick = 0.25 pts = $12.50.
+            - **Leverage** – Large notional exposure for small margin.
+            - **Initial Margin** – Amount required to open a position. [CME](https://www.cmegroup.com/clearing/margins/)
+            - **Maintenance Margin** – Minimum equity required to keep a position open.
+            - **Intraday Margin** – Lower broker-set requirement for day-only positions. [NinjaTrader](https://ninjatrader.com/futures/blogs/understanding-margin-in-futures-trading/?utm_source=chatgpt.com)
+            - **Expiration** – Date contract ceases trading.
+            - **Settlement** – How position closes: **Cash-settled** (e.g., ES, NQ, YM, RTY) or **Physical** (commodity delivery).
+            - **Roll** – Close near-term contract, open further out.
+            - **Hedger vs. Speculator** – Hedgers reduce risk, speculators trade for profit.
 
             ### Margin & Account Terms (NinjaTrader)
-            - **Intraday Margin** – Minimum balance to hold a futures position intraday.  
-            - **Initial Margin (Overnight)** – Exchange/broker requirement to hold overnight.  
-            - **Excess Intraday Margin** – Equity above intraday requirement.  
-            - **Excess Initial Margin** – Equity above overnight requirement.  
-            - **Commissions** – Broker execution fees.  
-              [NinjaTrader Margin Docs](https://ninjatrader.com/pricing/margins-position-management/?utm_source=chatgpt.com)  
+            - **Intraday Margin** – Minimum balance to hold a futures position intraday.
+            - **Initial Margin (Overnight)** – Exchange/broker requirement to hold overnight.
+            - **Excess Intraday Margin** – Equity above intraday requirement.
+            - **Excess Initial Margin** – Equity above overnight requirement.
+            - **Commissions** – Broker execution fees.
+              [NinjaTrader Margin Docs](https://ninjatrader.com/pricing/margins-position-management/?utm_source=chatgpt.com)
 
             ### Options Basics
-            - **Call Option** – Right (not obligation) to buy underlying at strike.  
-            - **Put Option** – Right (not obligation) to sell underlying at strike.  
-            - **Strike Price** – Price at which option may be exercised.  
-            - **Expiration Date** – Last day option can be exercised.  
-            - **Premium** – Price paid (buyer) or received (seller).  
-            - **In the Money (ITM)** – Call: underlying > strike; Put: underlying < strike.  
-            - **Out of the Money (OTM)** – Call: underlying < strike; Put: underlying > strike.  
-            - **At the Money (ATM)** – Underlying ≈ strike.  
-            - **Intrinsic Value** – Immediate exercise value.  
-            - **Extrinsic Value (Time Value)** – Premium minus intrinsic value.  
-            - **Exercise** – Using option right.  
-            - **Assignment** – Seller’s obligation when option is exercised.  
-            - **American vs. European Style** – American = exercisable any time; European = only at expiration.  
-            - **Volatility** – Historical (HV) vs Implied (IV).  
+            - **Call Option** – Right (not obligation) to buy underlying at strike.
+            - **Put Option** – Right (not obligation) to sell underlying at strike.
+            - **Strike Price** – Price at which option may be exercised.
+            - **Expiration Date** – Last day option can be exercised.
+            - **Premium** – Price paid (buyer) or received (seller).
+            - **In the Money (ITM)** – Call: underlying > strike; Put: underlying < strike.
+            - **Out of the Money (OTM)** – Call: underlying < strike; Put: underlying > strike.
+            - **At the Money (ATM)** – Underlying ≈ strike.
+            - **Intrinsic Value** – Immediate exercise value.
+            - **Extrinsic Value (Time Value)** – Premium minus intrinsic value.
+            - **Exercise** – Using option right.
+            - **Assignment** – Seller’s obligation when option is exercised.
+            - **American vs. European Style** – American = exercisable any time; European = only at expiration.
+            - **Volatility** – Historical (HV) vs Implied (IV).
 
             ### Options Positions (with Payoff Formulas & Diagrams)
-            - **Long Call** – Buy call; bullish, limited risk, unlimited upside. Payoff = max(0, S − K) − premium.  
+            - **Long Call** – Buy call; bullish, limited risk, unlimited upside. Payoff = max(0, S − K) − premium.
               ```
 
-            - **Short Call** – Sell call; bearish/neutral, limited profit, unlimited risk. Payoff = premium − max(0, S − K).  
+            - **Short Call** – Sell call; bearish/neutral, limited profit, unlimited risk. Payoff = premium − max(0, S − K).
               ```
 
 
-            - **Long Put** – Buy put; bearish, limited risk, upside if underlying falls. Payoff = max(0, K − S) − premium.  
+            - **Long Put** – Buy put; bearish, limited risk, upside if underlying falls. Payoff = max(0, K − S) − premium.
 
-            - **Short Put** – Sell put; bullish/neutral, limited profit, large downside risk. Payoff = premium − max(0, K − S).  
+            - **Short Put** – Sell put; bullish/neutral, limited profit, large downside risk. Payoff = premium − max(0, K − S).
               ```
-  
+
 
             ### Greeks (Exposures)
-            - **Delta** – Sensitivity of option price to $1 change in underlying.  
-            - **Gamma** – Sensitivity of delta to $1 change in underlying.  
-            - **Theta** – Sensitivity of option price to time decay.  
-            - **Vega** – Sensitivity of option price to 1% change in IV.  
-              [CBOE: Learning the Greeks](https://www.cboe.com/insights/posts/learning-the-greeks-an-experts-perspective/)  
+            - **Delta** – Sensitivity of option price to $1 change in underlying.
+            - **Gamma** – Sensitivity of delta to $1 change in underlying.
+            - **Theta** – Sensitivity of option price to time decay.
+            - **Vega** – Sensitivity of option price to 1% change in IV.
+              [CBOE: Learning the Greeks](https://www.cboe.com/insights/posts/learning-the-greeks-an-experts-perspective/)
 
-            - **Delta Exposure** – Aggregate delta exposure.  
-            - **Gamma Exposure** – Aggregate gamma exposure.  
-            - **Theta Exposure** – Aggregate theta exposure.  
-            - **Vega Exposure** – Aggregate vega exposure.  
-            - **Call Delta Exposure** – Delta from calls only.  
-            - **Put Delta Exposure** – Delta from puts only.  
-            - **Net Delta Exposure** – Call delta − Put delta.  
-            - **Net Gamma Exposure (GEX)** – Call gamma − Put gamma. Indicator of long vs short gamma regime.  
-            - **Net Theta Exposure** – Call theta − Put theta.  
-            - **Net Vega Exposure** – Call vega − Put vega.  
+            - **Delta Exposure** – Aggregate delta exposure.
+            - **Gamma Exposure** – Aggregate gamma exposure.
+            - **Theta Exposure** – Aggregate theta exposure.
+            - **Vega Exposure** – Aggregate vega exposure.
+            - **Call Delta Exposure** – Delta from calls only.
+            - **Put Delta Exposure** – Delta from puts only.
+            - **Net Delta Exposure** – Call delta − Put delta.
+            - **Net Gamma Exposure (GEX)** – Call gamma − Put gamma. Indicator of long vs short gamma regime.
+            - **Net Theta Exposure** – Call theta − Put theta.
+            - **Net Vega Exposure** – Call vega − Put vega.
 
             ### Gap Analysis / MAM
-            - **MAM Date** – Date of max adverse move.  
-            - **Days to MAM** – Days until max adverse move.  
-            - **Mean / Std / Median MAM (Pts)** – Statistics of adverse move.  
-            - **Q1 / Q3 MAM (Pts)** – 25th and 75th percentiles of adverse move.  
-            - **Mean / Std / Median Days to MAM** – Statistics of days until MAM.  
-            - **1st / 2nd / 3rd Quartile** – Distribution of days-to-target.  
-            - **IQR / Upper Bound** – Spread and statistical bound of days-to-target.  
+            - **MAM Date** – Date of max adverse move.
+            - **Days to MAM** – Days until max adverse move.
+            - **Mean / Std / Median MAM (Pts)** – Statistics of adverse move.
+            - **Q1 / Q3 MAM (Pts)** – 25th and 75th percentiles of adverse move.
+            - **Mean / Std / Median Days to MAM** – Statistics of days until MAM.
+            - **1st / 2nd / 3rd Quartile** – Distribution of days-to-target.
+            - **IQR / Upper Bound** – Spread and statistical bound of days-to-target.
 
             ### Options Metrics
-            - **Open Interest** – Number of outstanding option contracts.  
-            - **In the Money** – Option strike favorable vs spot.  
-            - **Implied Volatility (IV)** – Market-implied volatility.  
+            - **Open Interest** – Number of outstanding option contracts.
+            - **In the Money** – Option strike favorable vs spot.
+            - **Implied Volatility (IV)** – Market-implied volatility.
 
             ### Pinning Metrics
-            - **Total Activity** – Combined option activity at strike.  
-            - **Pinning Strength** – Strike pinning strength.  
-            - **Volume-Based Pin Rank / Influence-Based Pin Rank** – Rank of strike by volume or influence.  
-            - **Volume-Based Pin Candidate / Influence-Based Pin Candidate** – Whether strike is a pin candidate.  
+            - **Total Activity** – Combined option activity at strike.
+            - **Pinning Strength** – Strike pinning strength.
+            - **Volume-Based Pin Rank / Influence-Based Pin Rank** – Rank of strike by volume or influence.
+            - **Volume-Based Pin Candidate / Influence-Based Pin Candidate** – Whether strike is a pin candidate.
 
             ### Other Columns
-            - **Put/Call OI Ratio** – Ratio of put open interest vs call open interest.  
-            - **Vega Concentration / Vega Crush Zone / Theta Gravity** – Advanced positioning metrics.  
-            - **Strike Wall Tag / OI Gap Zone** – Strikes with large OI clusters or gaps.  
-            - **IV Slope** – Implied volatility skew across strikes.  
-            - **Gamma Regime** – Market regime by gamma exposure.  
-            - **Target vs Expected Move** – Gap target vs implied move.  
-            - **Day of Week OI Bias** – Open interest skew by weekday.  
+            - **Put/Call OI Ratio** – Ratio of put open interest vs call open interest.
+            - **Vega Concentration / Vega Crush Zone / Theta Gravity** – Advanced positioning metrics.
+            - **Strike Wall Tag / OI Gap Zone** – Strikes with large OI clusters or gaps.
+            - **IV Slope** – Implied volatility skew across strikes.
+            - **Gamma Regime** – Market regime by gamma exposure.
+            - **Target vs Expected Move** – Gap target vs implied move.
+            - **Day of Week OI Bias** – Open interest skew by weekday.
 
             ### Dealers
-            - **Dealer** – Financial institution or trading firm that provides liquidity by taking the other side of client option and futures trades. Dealers hedge inventory using underlying securities/futures, making hedging flows an important driver of price dynamics.  
-            - **Major Dealers / Market Makers** – Goldman Sachs, Citadel Securities, Jane Street, SIG, Optiver, IMC Trading, Barclays, Morgan Stanley, Bank of America.  
+            - **Dealer** – Financial institution or trading firm that provides liquidity by taking the other side of client option and futures trades. Dealers hedge inventory using underlying securities/futures, making hedging flows an important driver of price dynamics.
+            - **Major Dealers / Market Makers** – Goldman Sachs, Citadel Securities, Jane Street, SIG, Optiver, IMC Trading, Barclays, Morgan Stanley, Bank of America.
 
             ### Dealer Positioning
-            - **Long Gamma** – Dealers hedge by selling into rallies and buying into dips (stabilizes).  
-            - **Short Gamma** – Dealers hedge by buying into rallies and selling into dips (destabilizes).  
-            - **Vanna Exposure** – Sensitivity of delta to changes in IV; vol shocks drive hedge adjustments.  
-            - **Charm Exposure** – Delta decay with time; drives intraday rebalancing.  
-            - **Vega Positioning** – Long vega = benefit from rising vol; short vega = losses when vol rises.  
-            - **Skew Exposure** – Short puts force futures selling into declines.  
-            - **Gamma Flip Levels** – Thresholds where dealers switch from long to short gamma regimes.  
+            - **Long Gamma** – Dealers hedge by selling into rallies and buying into dips (stabilizes).
+            - **Short Gamma** – Dealers hedge by buying into rallies and selling into dips (destabilizes).
+            - **Vanna Exposure** – Sensitivity of delta to changes in IV; vol shocks drive hedge adjustments.
+            - **Charm Exposure** – Delta decay with time; drives intraday rebalancing.
+            - **Vega Positioning** – Long vega = benefit from rising vol; short vega = losses when vol rises.
+            - **Skew Exposure** – Short puts force futures selling into declines.
+            - **Gamma Flip Levels** – Thresholds where dealers switch from long to short gamma regimes.
 
             ### Probability Models
-            - **Black-Scholes (1973)** – [JSTOR](https://www.jstor.org/stable/1831029)  
-            - **Heston (1993)** – [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/0304405X9390022N)  
-            - **Merton Jump Diffusion (1976)** – [JSTOR](https://www.jstor.org/stable/2326921)  
-            - **Monte Carlo** – [Glasserman, *Monte Carlo Methods in Financial Engineering*](https://link.springer.com/book/10.1007/978-0-387-21617-1)  
+            - **Black-Scholes (1973)** – [JSTOR](https://www.jstor.org/stable/1831029)
+            - **Heston (1993)** – [ScienceDirect](https://www.sciencedirect.com/science/article/abs/pii/0304405X9390022N)
+            - **Merton Jump Diffusion (1976)** – [JSTOR](https://www.jstor.org/stable/2326921)
+            - **Monte Carlo** – [Glasserman, *Monte Carlo Methods in Financial Engineering*](https://link.springer.com/book/10.1007/978-0-387-21617-1)
             """)
         else:
             dash = LiveStreamDashboard(ticker)
@@ -1740,4 +1726,6 @@ for i in range(REFRESH_INTERVAL, 0, -1):
     countdown_placeholder.markdown(f"**Refresh in {i} sec**")
     time.sleep(1)
 st.rerun()
+
+
 
