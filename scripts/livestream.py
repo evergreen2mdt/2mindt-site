@@ -928,70 +928,7 @@ class LiveStreamDashboard:
                     st.error("No valid pinning metrics data available.")
                     st.write("Pinning metrics preview:", pin_df)
 
-            # with col1:
-            #     st.subheader("Pinning Strength")
-            #     st.markdown(
-            #         "<p style='font-size:14px;'>aggregate intensity of dealer positioning</p>",
-            #         unsafe_allow_html=True
-            #     )
-            #     pin_plot = pin_df.copy()
-            #     fig = px.bar(
-            #         pin_plot,
-            #         x="strike", y="pinning_strength_k",
-            #         labels={"pinning_strength_k": "×1k", "strike": "Strike"},
-            #         # title="Pinning Strength",
-            #         color_discrete_sequence=["#FF1493"]
-            #     )
-            #
-            #     wp = weighted_pin(pin_df.rename(
-            #         columns={"pinning_strength_k": "pin_strength"}),
-            #                       spot_price, window_abs=10, lam=3.0)
-            #     if wp is not None:
-            #         fig.add_vline(x=wp, line_dash="dash", line_color="orange")
-            #                       # annotation_text=f"Weighted Pin {wp:.2f}",
-            #                       # annotation_position="top",
-            #                       # annotation=dict(textangle=-90))
-            #     if spot_price is not None:
-            #         fig.add_vline(x=spot_price, line_dash="dash")
-            #         #               line_color="red",
-            #         #               annotation_text=f"Spot {spot_price:.2f}",
-            #         #               annotation_position="top",
-            #         #               annotation=dict(textangle=-90))
-            #     if today_target is not None and not today_target.empty:
-            #         tgt = today_target.iloc[0]["previous_close"]
-            #         fig.add_vline(x=tgt, line_dash="dash", line_color="purple")
-            #                       # annotation_text="Target",
-            #                       # annotation_position="top",
-            #                       # annotation=dict(textangle=-90))
-            #
-            #
-            #     # --- legend for vlines with numeric values ---
-            #     fig.add_scatter(
-            #         x=[None], y=[None],
-            #         mode="lines",
-            #         line=dict(color="purple", dash="dash"),
-            #         name=f"Target ({tgt:.2f})"
-            #     )
-            #     fig.add_scatter(
-            #         x=[None], y=[None],
-            #         mode="lines",
-            #         line=dict(color="red", dash="dash"),
-            #         name=f"Spot ({spot_price:.2f})"
-            #     )
-            #     if wp is not None:
-            #         fig.add_scatter(
-            #             x=[None], y=[None],
-            #             mode="lines",
-            #             line=dict(color="orange", dash="dash"),
-            #             name=f"Weighted Pin ({wp:.2f})"
-            #         )
-            #
-            #     fig.update_layout(bargap=0.05,
-            #                       xaxis=dict(tickmode="linear",
-            #                                  tick0=pin_plot["strike"].min(),
-            #                                  dtick=1),
-            #                       yaxis=dict(showgrid=True))
-            #     st.plotly_chart(fig, use_container_width=True)
+
 
             # ----- DELTA EXPOSURE -----
             with col2:
@@ -1179,6 +1116,8 @@ class LiveStreamDashboard:
                                               "jump diffusion probs")
             df_heston = read_excel_from_dropbox(self.dbx, self.snapshot_path,
                                                 "heston probs")
+            self.render_volatility_panel()
+
 
             c1, c2 = st.columns(2)
             with c1:
@@ -1529,7 +1468,7 @@ class LiveStreamDashboard:
             self.render_narratives(today_target)
             self.render_charts(today_target)
         self.render_timebands()
-        self.render_volatility_panel()
+        # self.render_volatility_panel()
         self.render_futures_model()
 
 
