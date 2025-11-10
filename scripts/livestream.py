@@ -173,12 +173,21 @@ def weighted_pin(df_pins, spot, window_pct=0.05, window_abs=None, lam=3.0, min_s
         return None
     return float((pins['strike'] * eff_w).sum() / wsum)
 
-def get_paths(ticker: str):
+# def get_paths(ticker: str):
+#     t = ticker.lower()
+#     return {
+#         "options_dir": f"/{t}/{t}-options/",
+#         "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
+#         "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
+#     }
+
+def get_paths(ticker: str, parent: str = None):
     t = ticker.lower()
+    p = (parent or t).lower()
     return {
-        "options_dir": f"/{t}/{t}-options/",
-        "gaps_file": f"/{t}/{t}-gaps-analysis/{t} gap analysis.xlsx",
-        "timebands_file": f"/{t}/{t}-timebands/{t}_timeband_volume.xlsx",
+        "options_dir": f"/{p}/{p}-options/",
+        "gaps_file": f"/{p}/{p}-gaps-analysis/{p} gap analysis.xlsx",
+        "timebands_file": f"/{p}/{t}-timebands/{t}_timeband_volume.xlsx",
     }
 
 
@@ -826,20 +835,7 @@ class LiveStreamDashboard:
             df_raw = read_excel_from_dropbox(self.dbx, dropbox_file,
                                              "raw options")
 
-            # print(">>> df_pin shape:", df_mc.shape)
-            # st.write(">>> df_pin preview:", df_mc.head())
-            #
-            # print(">>> df_pin shape:", df_final.shape)
-            # st.write(">>> df_pin preview:", df_final.head())
-            #
-            # print(">>> df_pin shape:", df_pin.shape)
-            # st.write(">>> df_pin preview:", df_pin.head())
-            #
-            # print(">>> df_pin shape:", df_greeks.shape)
-            # st.write(">>> df_pin preview:", df_greeks.head())
-            #
-            # print(">>> df_pin shape:", df_raw.shape)
-            # st.write(">>> df_pin preview:", df_raw.head())
+
 
             spot_price = df_raw["spot"].mode().iloc[0]
 
@@ -1436,11 +1432,11 @@ class LiveStreamDashboard:
             desired_cols = [
                 "date", "band", "session", "volume",
                 "avg_20d", "stdev_20d", "ratio_to_avg_20d",
-                "est_vol_at_close", "projected_zscore"
+                 "projected_zscore", "est_vol_at_close"
             ]
             df_prev = df_prev[[c for c in desired_cols if c in df_prev.columns]]
             for col in ["volume", "avg_20d", "stdev_20d", "ratio_to_avg_20d",
-                        "est_vol_at_close", "projected_zscore"]:
+                        "projected_zscore", "est_vol_at_close"]:
                 if col in df_prev.columns:
                     df_prev[col] = pd.to_numeric(df_prev[col], errors="coerce")
 
@@ -1455,8 +1451,9 @@ class LiveStreamDashboard:
                     "avg_20d": "{:,.0f}",
                     "stdev_20d": "{:,.0f}",
                     "ratio_to_avg_20d": "{:.3f}",
-                    "est_vol_at_close": "{:.3f}",
                     "projected_zscore": "{:.3f}",
+                    "est_vol_at_close": "{:.3f}"
+                    ,
                 }),
                 hide_index=True,
                 width="stretch",
@@ -1493,8 +1490,8 @@ class LiveStreamDashboard:
                 st.subheader(f"{sym.upper()} Timebands")
                 cols = [
                     "date_only", "band", "session", "volume",
-                    "avg_20d", "stdev_20d", "ratio_to_avg_20d",
-                    "est_vol_at_close", "projected_zscore"
+                    "avg_20d", "stdev_20d", "ratio_to_avg_20d", "projected_zscore",
+                    "est_vol_at_close"
                 ]
                 keep = [c for c in cols if c in fdf.columns]
                 st.dataframe(
@@ -1503,8 +1500,9 @@ class LiveStreamDashboard:
                         "avg_20d": "{:,.0f}",
                         "stdev_20d": "{:,.0f}",
                         "ratio_to_avg_20d": "{:.3f}",
-                        "est_vol_at_close": "{:.3f}",
                         "projected_zscore": "{:.3f}",
+                        "est_vol_at_close": "{:.3f}"
+
                     }),
                     hide_index=True,
                     width="stretch",

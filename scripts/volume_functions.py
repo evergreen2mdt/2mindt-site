@@ -129,7 +129,8 @@ def format_timebands_book(path: str):
 
 
 # ----- Main runner -----
-def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True):
+def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True, parent_ticker=None):
+
     """
     Pull 30-minute historical bars for the given ticker (ETF or futures),
     compute rolling 20-day averages and z-scores, and upload results to Dropbox.
@@ -281,7 +282,15 @@ def run_timebands_30m(ticker, days=20, include_rth=True, include_eth=True):
             df.to_excel(w, sheet_name="Timebands", index=False)
 
         # === Upload to Dropbox ===
-        dropbox_path = get_dropbox_path(ticker, "timebands", filename)
+        parent = (parent_ticker or ticker)
+        if ticker.lower() == "es":
+            category = "es-timebands"
+        elif ticker.lower() == "mes":
+            category = "mes-timebands"
+        else:
+            category = "timebands"
+        dropbox_path = get_dropbox_path(parent, category, filename)
+
         print(f"[DEBUG] {ticker}: Uploading file to Dropbox → {dropbox_path}")
         upload_file(local_filename, dropbox_path)
         print(f"[Dropbox] Uploaded {ticker} timebands → {dropbox_path}")

@@ -599,7 +599,7 @@ def save_red_green_workbook(df: pd.DataFrame, ticker: str) -> str:
     days_to_green = create_days_to_green_summary_table(df)
 
     # Save to same temp path as other workbooks
-    tmp_dir = r"C:\2mdt\2mindt-site\scripts"
+    tmp_dir = r"C:\2mdt\2mindt-site\temp files"
     os.makedirs(tmp_dir, exist_ok=True)
     path = os.path.join(tmp_dir, f"{ticker.lower()}_red_green.xlsx")
 
@@ -719,9 +719,7 @@ def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
         )
 
         # --- Upload main workbook to Dropbox ---
-        # dropbox_path = get_dropbox_path(ticker, "gaps", local_filename)
-        dropbox_path = get_dropbox_path(ticker, "gaps-analysis",
-                                        local_filename)
+        dropbox_path = get_dropbox_path(ticker, "gaps", local_filename)
 
         upload_file(local_filename, dropbox_path)
         print(f"[Dropbox] Uploaded {ticker} gap analysis → {dropbox_path}")
@@ -745,6 +743,7 @@ def run_gap_analysis_for_contracts(ticker_map: dict, dfs: dict,
             # 4. Remove local temp copy
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
+
                 print(f"[Local] Deleted temporary file: {tmp_path}")
 
         except Exception as e:

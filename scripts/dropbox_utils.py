@@ -38,15 +38,3 @@ def read_excel(dropbox_path: str, **kwargs) -> pd.DataFrame:
     _, res = dbx.files_download(dropbox_path)
     return pd.read_excel(BytesIO(res.content), **kwargs)
 
-import os
-#
-# def get_dropbox_path(ticker: str, category: str, filename: str) -> str:
-#     """
-#     Build a normalized Dropbox path for ticker-level uploads.
-#     Example:  /spy/spy-timebands/spy_timeband_volume.xlsx
-#     """
-#     folder = f"/{ticker.lower()}/{ticker.lower()}-{category.lower()}"
-#     if not filename.lower().endswith(".xlsx"):
-#         filename = f"{filename}.xlsx"
-#     path = os.path.join(folder, filename).replace("\\", "/")
-#     return path

@@ -1,4 +1,6 @@
 # futures_model.py — dynamic ETF → futures mapping (no hardcoded SPY/MES)
+
+
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import numpy as np
@@ -7,7 +9,7 @@ import yfinance as yf
 import warnings
 from config import TICKER_MAP, ETF_TO_FUTURES
 from dropbox_utils import upload_file
-
+import os
 warnings.filterwarnings("ignore", category=FutureWarning)
 US_EASTERN = ZoneInfo("America/New_York")
 
@@ -183,6 +185,7 @@ def run_futures_model():
             dropbox_path = f"/{etf.lower()}/{fut.lower()}-futures-model/{fut.lower()}_futures_model.xlsx"
             df_out.to_excel(local_path, index=False)
             upload_file(local_path, dropbox_path)
+            os.remove(local_path)
             print(f"[Dropbox] Uploaded → {dropbox_path}")
 
     return pd.DataFrame(all_results)

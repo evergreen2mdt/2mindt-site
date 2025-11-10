@@ -389,20 +389,17 @@ def run_futures_volume(symbol="ES", parent_ticker=None):
     abs_path = os.path.abspath(fname)
 
     # --- Upload to Dropbox (wipe and write fresh) ---
+
     parent = (parent_ticker or symbol).lower()
-    child = f"{symbol.lower()}-timebands-volume"
+    child = f"{symbol.lower()}-timebands"
     folder = f"/{parent}/{child}"
+    dropbox_path = f"{folder}/{symbol.lower()}_timeband_volume.xlsx"
+
     _wipe_folder(folder)  # clear old ES/MES file versions
-    dropbox_path = f"{folder}/{os.path.basename(fname)}"
+
     upload_file(abs_path, dropbox_path)
     print(f"[Dropbox] Uploaded {symbol} → {dropbox_path}")
 
-    # --- Upload to Dropbox ---
-    parent = (parent_ticker or symbol).lower()  # "spy" / "qqq" ...
-    child = f"{symbol.lower()}-timebands-volume"  # e.g., "es-timebands-volume"
-    dropbox_path = f"/{parent}/{child}/{os.path.basename(fname)}"
-    upload_file(abs_path, dropbox_path)
-    print(f"[Dropbox] Uploaded {symbol} → {dropbox_path}")
 
     # --- Clean up local ---
     try:
