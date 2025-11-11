@@ -469,6 +469,7 @@ class LiveStreamDashboard:
         self.paths = get_paths(ticker)
         self.snapshot_path = None  # Delay initialization
 
+
     def render_futures_model(self):
         """Render the Futures Microstructure Model section."""
         st.subheader("Futures Microstructure Model")
@@ -979,7 +980,7 @@ class LiveStreamDashboard:
 
             # ----- GAMMA EXPOSURE -----
             with col3:
-                st.subheader("Dealer Gamma Exposure ")
+                st.subheader("Option Derived Dealer Gamma Exposure ")
                 st.markdown(
                     "<p style='font-size:14px;'>sensitivity of delta to underlying price changes</p>",
                     unsafe_allow_html=True
@@ -1027,7 +1028,7 @@ class LiveStreamDashboard:
 
             # ----- VEGA EXPOSURE -----
             with col4:
-                st.subheader("Vega Exposure")
+                st.subheader("Option Derived Dealer Vega Exposure")
 
                 st.markdown(
                     "<p style='font-size:14px;'>sensitivity of option value to implied volatility changes</p>",
@@ -1118,6 +1119,7 @@ class LiveStreamDashboard:
                                                 "heston probs")
             self.render_volatility_panel()
 
+            self.render_option_demand_panel()
 
             c1, c2 = st.columns(2)
             with c1:
@@ -1148,6 +1150,187 @@ class LiveStreamDashboard:
                 plt.close(fig)
         except Exception as e:
             st.error(f"Charts failed: {e}")
+
+    def render_option_demand_panel(self):
+        """Visualize option demand using OI and IV deltas between last two snapshots."""
+        try:
+            folder = f"/{self.ticker.lower()}/{self.ticker.lower()}-options/"
+
+            res = self.dbx.files_list_folder(folder)
+            entries = [e for e in res.entries if e.name.endswith(".xlsx")]
+            entries.sort(key=lambda e: e.client_modified, reverse=True)
+            if len(entries) < 2:
+                st.info("Need at least two snapshots to compute demand deltas.")
+                return
+
+            import plotly.express as px
+
+            st.subheader("Option Demand Panel")
+
+            # --- Load vega data (from greeks) ---
+            df_today_greeks = dbx_read_excel(f"{folder}{entries[0].name}",
+                                             sheet_name="greeks")
+            df_prev_greeks = dbx_read_excel(f"{folder}{entries[1].name}",
+                                            sheet_name="greeks")
+
+            # --- Vega Metric Summary ---
+            if any(col in df_today_greeks.columns for col in
+                   ["net_vega_exposure", "weighted_vega_exposure"]):
+                vega_col = "net_vega_exposure" if "net_vega_exposure" in df_today_greeks.columns else "weighted_vega_exposure"
+                total_vega = df_today_greeks[vega_col].sum()
+                st.metric("Net Vega Exposure", f"{total_vega:,.0f}")
+            else:
+                st.info("No vega data found in this snapshot.")
+
+            # --- Load option flow data (from raw options) ---
+            df_today = dbx_read_excel(f"{folder}{entries[0].name}",
+                                      sheet_name="raw options")
+            df_prev = dbx_read_excel(f"{folder}{entries[1].name}",
+                                     sheet_name="raw options")
+
+            # === Net Option Demand (ΔOI × ΔIV)
+            merged = df_today.merge(
+                df_prev[
+                    ["strike", "type", "impliedVolatility", "openInterest"]],
+                on=["strike", "type"],
+                how="left",
+                suffixes=("", "_prev")
+            )
+            merged["ΔOI"] = merged["openInterest"] - merged["openInterest_prev"]
+            merged["ΔIV"] = merged["impliedVolatility"] - merged[
+                "impliedVolatility_prev"]
+            merged["option_demand"] = merged["ΔOI"] * merged["ΔIV"]
+
+            demand = merged.groupby("strike")[
+                "option_demand"].sum().reset_index()
+            st.plotly_chart(
+                px.bar(
+                    demand, x="strike", y="option_demand",
+                    color="option_demand",
+                    color_continuous_scale=["red", "green"],
+                    title="Net Option Demand by Strike (ΔOI × ΔIV)"
+                ),
+                use_container_width=True
+            )
+
+            # === Call/Put Flow Ratio
+            cp = merged.groupby(["strike", "type"])[
+                "openInterest"].sum().unstack(fill_value=0)
+            cp["call_put_ratio"] = cp["call"] / cp["put"].replace(0, np.nan)
+            st.plotly_chart(
+                px.line(cp, x=cp.index, y="call_put_ratio",
+                        title="Call/Put Open Interest Ratio"),
+                use_container_width=True
+            )
+
+            # === IV–OI Matrix
+            st.plotly_chart(
+                px.scatter(merged, x="ΔOI", y="ΔIV", color="strike",
+                           title="IV vs OI Change per Option"),
+                use_container_width=True
+            )
+
+            # === Net Vega vs IV
+            if "net_vega_exposure" in df_today_greeks.columns:
+                dv = df_today_greeks["net_vega_exposure"].sum() - \
+                     df_prev_greeks["net_vega_exposure"].sum()
+                div = df_today["impliedVolatility"].mean() - df_prev[
+                    "impliedVolatility"].mean()
+                st.metric("Net Vega Δ vs IV Δ", f"{dv:,.0f}", f"{div:.2%}")
+
+            st.caption(
+                "Green = buying pressure, Red = selling. Ratios >1 → upside call demand.")
+
+        except Exception as e:
+            st.error(f"Option Demand Panel failed: {e}")
+
+    # # ===============================
+    # # Option Demand Panel
+    # # ===============================
+    # def render_option_demand_panel(self):
+    #     """Visualize option demand using OI and IV deltas between last two snapshots."""
+    #     try:
+    #         folder = f"/{self.ticker.lower()}/{self.ticker.lower()}-options/"
+    #
+    #         res = self.dbx.files_list_folder(folder)
+    #         entries = [e for e in res.entries if e.name.endswith(".xlsx")]
+    #         entries.sort(key=lambda e: e.client_modified, reverse=True)
+    #         if len(entries) < 2:
+    #             st.info("Need at least two snapshots to compute demand deltas.")
+    #             return
+    #
+    #         # --- Read latest two workbooks
+    #         df_today = dbx_read_excel(f"{folder}{entries[0].name}",
+    #                                   sheet_name="raw options")
+    #         df_prev = dbx_read_excel(f"{folder}{entries[1].name}",
+    #                                  sheet_name="raw options")
+    #
+    #         import plotly.express as px
+    #
+    #         st.subheader("Option Demand Panel")
+    #
+    #         # --- Vega Metric Summary ---
+    #         if any(col in df_today.columns for col in
+    #                ["net_vega_exposure", "weighted_vega_exposure"]):
+    #             vega_col = "net_vega_exposure" if "net_vega_exposure" in df_today.columns else "weighted_vega_exposure"
+    #             total_vega = df_today[vega_col].sum()
+    #             st.metric("Net Vega Exposure", f"{total_vega:,.0f}")
+    #         else:
+    #             st.info("No vega data found in this snapshot.")
+    #
+    #         # === Net Option Demand (ΔOI × ΔIV)
+    #         merged = df_today.merge(
+    #             df_prev[
+    #                 ["strike", "type", "impliedVolatility", "openInterest"]],
+    #             on=["strike", "type"],
+    #             how="left",
+    #             suffixes=("", "_prev")
+    #         )
+    #         merged["ΔOI"] = merged["openInterest"] - merged["openInterest_prev"]
+    #         merged["ΔIV"] = merged["impliedVolatility"] - merged[
+    #             "impliedVolatility_prev"]
+    #         merged["option_demand"] = merged["ΔOI"] * merged["ΔIV"]
+    #         demand = merged.groupby("strike")[
+    #             "option_demand"].sum().reset_index()
+    #         st.plotly_chart(
+    #             px.bar(
+    #                 demand, x="strike", y="option_demand",
+    #                 color="option_demand",
+    #                 color_continuous_scale=["red", "green"],
+    #                 title="Net Option Demand by Strike (ΔOI × ΔIV)"
+    #             ),
+    #             use_container_width=True
+    #         )
+    #
+    #         # === Call/Put Flow Ratio
+    #         cp = merged.groupby(["strike", "type"])[
+    #             "openInterest"].sum().unstack(fill_value=0)
+    #         cp["call_put_ratio"] = cp["call"] / cp["put"].replace(0, np.nan)
+    #         st.plotly_chart(
+    #             px.line(cp, x=cp.index, y="call_put_ratio",
+    #                     title="Call/Put Open Interest Ratio"),
+    #             use_container_width=True
+    #         )
+    #
+    #         # === IV–OI Matrix
+    #         st.plotly_chart(
+    #             px.scatter(merged, x="ΔOI", y="ΔIV", color="strike",
+    #                        title="IV vs OI Change per Option"),
+    #             use_container_width=True
+    #         )
+    #
+    #         # === Net Vega vs IV
+    #         if "net_vega_exposure" in df_today.columns:
+    #             dv = df_today["net_vega_exposure"].sum() - df_prev[
+    #                 "net_vega_exposure"].sum()
+    #             div = df_today["impliedVolatility"].mean() - df_prev[
+    #                 "impliedVolatility"].mean()
+    #             st.metric("Net Vega Δ vs IV Δ", f"{dv:,.0f}", f"{div:.2%}")
+    #
+    #         st.caption(
+    #             "Green = buying pressure, Red = selling. Ratios >1 → upside call demand.")
+    #     except Exception as e:
+    #         st.error(f"Option Demand Panel failed: {e}")
 
     # ===============================
     # Volatility Panel
