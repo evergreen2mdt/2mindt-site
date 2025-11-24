@@ -16,6 +16,9 @@ import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf  # for VIX data
 
+
+from snapshot_utils import write_snapshot_bundle
+
 # --- project
 from config import (
     ETF_TO_FUTURES,
@@ -27,6 +30,10 @@ from dropbox_utils import (
     get_dropbox_client,
     read_excel as dbx_read_excel,
 )
+
+import sys
+print("[python executable]", sys.executable)
+
 US_EASTERN = ZoneInfo("America/New_York")
 
 # ADD near the other globals (right after US_EASTERN)
@@ -344,6 +351,9 @@ def render_futures_volume_chart(df: pd.DataFrame, ticker: str):
 
 
 
+
+
+
 # === Utility Functions ===
 def safe_read_excel(path, sheet_name, retries=5, delay=1.0):
     for i in range(retries):
@@ -439,7 +449,7 @@ def _load_gamma_pin_metrics(ticker: str):
     """Read latest options file and extract spot, weighted pin."""
     info = {"spot": np.nan, "weighted_pin": np.nan, "gex_total": np.nan}
     try:
-        folder = f"/{ticker.lower()}/{ticker.lower()}-options-data/"
+        folder = f"/{ticker.lower()}/{ticker.lower()}-options/"
         dbx = get_dropbox_client()
         res = dbx.files_list_folder(folder)
         entries = [e for e in res.entries if e.name.endswith(".xlsx")]
@@ -649,7 +659,7 @@ class LiveStreamDashboard:
             f"{self.ticker} snapshot",
             options=labels,
             value=labels[0],
-            key=f"{self.ticker}_snapshot"
+            key=f"{self.ticker}_snapshot_{id(self)}"
         )
         chosen = files[labels.index(chosen_label)]
         return f"{options_dir}{chosen}"
@@ -1069,7 +1079,7 @@ class LiveStreamDashboard:
 
             # ----- THETA EXPOSURE -----
             with col5:
-                st.subheader("Theta Exposure")
+                st.subheader("Option Derived Dealer Theta Exposure")
                 st.markdown(
                     "<p style='font-size:14px;'>sensitivity of option value to time decay</p>",
                     unsafe_allow_html=True
@@ -1244,93 +1254,6 @@ class LiveStreamDashboard:
         except Exception as e:
             st.error(f"Option Demand Panel failed: {e}")
 
-    # # ===============================
-    # # Option Demand Panel
-    # # ===============================
-    # def render_option_demand_panel(self):
-    #     """Visualize option demand using OI and IV deltas between last two snapshots."""
-    #     try:
-    #         folder = f"/{self.ticker.lower()}/{self.ticker.lower()}-options/"
-    #
-    #         res = self.dbx.files_list_folder(folder)
-    #         entries = [e for e in res.entries if e.name.endswith(".xlsx")]
-    #         entries.sort(key=lambda e: e.client_modified, reverse=True)
-    #         if len(entries) < 2:
-    #             st.info("Need at least two snapshots to compute demand deltas.")
-    #             return
-    #
-    #         # --- Read latest two workbooks
-    #         df_today = dbx_read_excel(f"{folder}{entries[0].name}",
-    #                                   sheet_name="raw options")
-    #         df_prev = dbx_read_excel(f"{folder}{entries[1].name}",
-    #                                  sheet_name="raw options")
-    #
-    #         import plotly.express as px
-    #
-    #         st.subheader("Option Demand Panel")
-    #
-    #         # --- Vega Metric Summary ---
-    #         if any(col in df_today.columns for col in
-    #                ["net_vega_exposure", "weighted_vega_exposure"]):
-    #             vega_col = "net_vega_exposure" if "net_vega_exposure" in df_today.columns else "weighted_vega_exposure"
-    #             total_vega = df_today[vega_col].sum()
-    #             st.metric("Net Vega Exposure", f"{total_vega:,.0f}")
-    #         else:
-    #             st.info("No vega data found in this snapshot.")
-    #
-    #         # === Net Option Demand (ΔOI × ΔIV)
-    #         merged = df_today.merge(
-    #             df_prev[
-    #                 ["strike", "type", "impliedVolatility", "openInterest"]],
-    #             on=["strike", "type"],
-    #             how="left",
-    #             suffixes=("", "_prev")
-    #         )
-    #         merged["ΔOI"] = merged["openInterest"] - merged["openInterest_prev"]
-    #         merged["ΔIV"] = merged["impliedVolatility"] - merged[
-    #             "impliedVolatility_prev"]
-    #         merged["option_demand"] = merged["ΔOI"] * merged["ΔIV"]
-    #         demand = merged.groupby("strike")[
-    #             "option_demand"].sum().reset_index()
-    #         st.plotly_chart(
-    #             px.bar(
-    #                 demand, x="strike", y="option_demand",
-    #                 color="option_demand",
-    #                 color_continuous_scale=["red", "green"],
-    #                 title="Net Option Demand by Strike (ΔOI × ΔIV)"
-    #             ),
-    #             use_container_width=True
-    #         )
-    #
-    #         # === Call/Put Flow Ratio
-    #         cp = merged.groupby(["strike", "type"])[
-    #             "openInterest"].sum().unstack(fill_value=0)
-    #         cp["call_put_ratio"] = cp["call"] / cp["put"].replace(0, np.nan)
-    #         st.plotly_chart(
-    #             px.line(cp, x=cp.index, y="call_put_ratio",
-    #                     title="Call/Put Open Interest Ratio"),
-    #             use_container_width=True
-    #         )
-    #
-    #         # === IV–OI Matrix
-    #         st.plotly_chart(
-    #             px.scatter(merged, x="ΔOI", y="ΔIV", color="strike",
-    #                        title="IV vs OI Change per Option"),
-    #             use_container_width=True
-    #         )
-    #
-    #         # === Net Vega vs IV
-    #         if "net_vega_exposure" in df_today.columns:
-    #             dv = df_today["net_vega_exposure"].sum() - df_prev[
-    #                 "net_vega_exposure"].sum()
-    #             div = df_today["impliedVolatility"].mean() - df_prev[
-    #                 "impliedVolatility"].mean()
-    #             st.metric("Net Vega Δ vs IV Δ", f"{dv:,.0f}", f"{div:.2%}")
-    #
-    #         st.caption(
-    #             "Green = buying pressure, Red = selling. Ratios >1 → upside call demand.")
-    #     except Exception as e:
-    #         st.error(f"Option Demand Panel failed: {e}")
 
     # ===============================
     # Volatility Panel
@@ -1346,7 +1269,8 @@ class LiveStreamDashboard:
         pin_info = _load_gamma_pin_metrics(ticker)
         # --- Compute weighted pin dynamically from latest snapshot ---
         try:
-            folder = f"/{self.ticker.lower()}/{self.ticker.lower()}-options-data/"
+            folder = f"/{self.ticker.lower()}/{self.ticker.lower()}-options/"
+
             res = self.dbx.files_list_folder(folder)
             entries = [e for e in res.entries if e.name.endswith(".xlsx")]
             entries.sort(key=lambda e: e.client_modified, reverse=True)
@@ -1654,6 +1578,101 @@ class LiveStreamDashboard:
         # self.render_volatility_panel()
         self.render_futures_model()
 
+from snapshot_utils import save_snapshot_for_gpt
+
+# # --- Safe Snapshot Button Handler ---
+# if st.button("📸 Save Snapshot for GPT Review"):
+#     dash = LiveStreamDashboard("SPY")
+#
+#     # --- Obtain latest snapshot file ---
+#     dash.snapshot_path = dash._get_latest_snapshot()
+#
+#     # --- Load required sheets safely ---
+#     try:
+#         df_raw = read_excel_from_dropbox(dash.dbx, dash.snapshot_path, "raw options")
+#         df_greeks = read_excel_from_dropbox(dash.dbx, dash.snapshot_path, "greeks")
+#         df_pin = read_excel_from_dropbox(dash.dbx, dash.snapshot_path, "pinning metrics")
+#     except Exception as e:
+#         st.error(f"Snapshot failed to load underlying sheets: {e}")
+#         st.stop()
+#
+#     # --- Ensure all sheets are present and non-empty ---
+#     if df_raw.empty or df_greeks.empty or df_pin.empty:
+#         st.error("Snapshot aborted: one or more required sheets are empty.")
+#         st.stop()
+#
+#     # --- Spot (mode from raw options sheet) ---
+#     if "spot" not in df_raw.columns:
+#         st.error("Snapshot aborted: 'spot' column is missing in raw options.")
+#         st.stop()
+#
+#     try:
+#         spot = (
+#             pd.to_numeric(df_raw["spot"], errors="coerce")
+#             .dropna()
+#             .mode()
+#             .iloc[0]
+#         )
+#     except Exception as e:
+#         st.error(f"Failed extracting spot price: {e}")
+#         st.stop()
+#
+#     # --- Target ---
+#     target_df = dash.render_gap_targets()
+#     if target_df is None or target_df.empty:
+#         target = "—"
+#     else:
+#         target = target_df.iloc[0]["previous_close"]
+#
+#     # --- Build Charts Safely ---
+#     try:
+#         strikes = sorted(df_pin["strike"].unique())
+#
+#         pin_df = (
+#             df_pin.groupby("strike")["pinning_strength"]
+#             .max()
+#             .reset_index()
+#         )
+#
+#         gamma_all = (
+#             df_greeks.groupby("strike")[
+#                 ["call_gamma_exposure", "put_gamma_exposure"]
+#             ]
+#             .sum()
+#         )
+#         gamma_all["net"] = (
+#             gamma_all["call_gamma_exposure"]
+#             - gamma_all["put_gamma_exposure"]
+#         )
+#         gamma_all = gamma_all.reindex(strikes).fillna(0) / 1e6
+#
+#         delta_all = (
+#             df_greeks.groupby("strike")[["delta_exposure"]]
+#             .sum()
+#             .reindex(strikes)
+#             .fillna(0)
+#             / 1e6
+#         )
+#
+#         import plotly.express as px
+#
+#         charts = {
+#             "pinning_strength": px.bar(pin_df, x="strike", y="pinning_strength"),
+#             "gamma_exposure": px.bar(gamma_all.reset_index(), x="strike", y="net"),
+#             "delta_exposure": px.bar(delta_all.reset_index(), x="strike", y="delta_exposure"),
+#         }
+#
+#     except Exception as e:
+#         st.error(f"Snapshot chart creation failed: {e}")
+#         st.stop()
+#
+#     # --- Save snapshot via snapshot_utils ---
+#     try:
+#         path = save_snapshot_for_gpt("SPY", spot, target, df_raw, charts)
+#         st.success(f"Snapshot saved: {os.path.basename(path)}")
+#         st.write(f"Saved to: `{path}`")
+#     except Exception as e:
+#         st.error(f"Snapshot saving failed: {e}")
 
 # === Page Config ===
 st.set_page_config(layout="wide")
@@ -1837,6 +1856,40 @@ for tab, ticker in zip(tabs, list(TICKER_MAP.keys()) + ["Glossary"]):
         else:
             dash = LiveStreamDashboard(ticker)
             dash.render_all()
+
+
+
+# # --- AUTO SNAPSHOT: runs once per Streamlit loop ---
+# dash = LiveStreamDashboard("SPY")
+# dash.snapshot_path = dash._get_latest_snapshot()
+#
+# df_raw = read_excel_from_dropbox(dash.dbx, dash.snapshot_path, "raw options")
+# spot = df_raw["spot"].mode().iloc[0]
+#
+# target_df = dash.render_gap_targets()
+# target = target_df.iloc[0]["previous_close"] if target_df is not None else "—"
+#
+# df_pin = read_excel_from_dropbox(dash.dbx, dash.snapshot_path, "pinning metrics")
+# df_greeks = read_excel_from_dropbox(dash.dbx, dash.snapshot_path, "greeks")
+#
+# strikes = sorted(df_pin["strike"].unique())
+# pin_df = df_pin.groupby("strike")["pinning_strength"].max().reset_index()
+#
+# gamma = df_greeks.groupby("strike")[["call_gamma_exposure", "put_gamma_exposure"]].sum()
+# gamma["net"] = gamma["call_gamma_exposure"] - gamma["put_gamma_exposure"]
+# gamma = gamma.reindex(strikes).fillna(0) / 1e6
+#
+# delta = df_greeks.groupby("strike")[["delta_exposure"]].sum().reindex(strikes).fillna(0) / 1e6
+#
+# import plotly.express as px
+# charts = {
+#     "pinning_strength": px.bar(pin_df, x="strike", y="pinning_strength"),
+#     "gamma_exposure": px.bar(gamma.reset_index(), x="strike", y="net"),
+#     "delta_exposure": px.bar(delta.reset_index(), x="strike", y="delta_exposure"),
+# }
+#
+# path = save_snapshot_for_gpt("SPY", spot, target, df_raw, charts)
+# st.write(f"Snapshot saved: {path}")
 
 
 # === Auto-refresh ===
